@@ -91,3 +91,5 @@ common/
 - Implemented validation exception handling
 - Enhanced HTTP utility error handling with proper typing
 - Added retry mechanism with exponential backoff
+- Implemented Paycrest and Blockradar API service wrappers with tests
+- Added interfaces for external API requests and responses
