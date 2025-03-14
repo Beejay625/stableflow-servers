@@ -1,0 +1,39 @@
+---
+description: Directory Structure and Context Management
+globs: ["**"]
+alwaysApply: true
+---
+
+# Directory Structure and Context Management
+
+## Core Directory Structure
+- The project is organized with specific directories for different components
+- The main backend code is located in `stableflow-Backend` directory
+- All commands should be executed from the appropriate directory context
+
+## Command Execution Guidelines
+- Always verify the current working directory before executing commands
+- Commands related to the backend must be run from within the `stableflow-Backend` directory
+- When switching between tasks, explicitly change directories as needed
+- For running tests, make sure to be inside the `stableflow-Backend` directory
+
+## Directory Change Protocol
+1. Before executing any command, verify current directory with `pwd`
+2. If working on backend features, ensure you're in `stableflow-Backend`
+3. When moving between components, use explicit `cd` commands
+4. After directory changes, verify the change was successful
+
+## Common Directory Paths
+- Backend root: `/Users/seyi.idowu/Desktop/stableflow/stableflow-Backend`
+- Frontend root: `/Users/seyi.idowu/Desktop/stableflow/stableflow-Frontend` (if applicable)
+- Project root: `/Users/seyi.idowu/Desktop/stableflow`
+
+## Testing Commands
+- All backend test commands must be run from `stableflow-Backend` directory
+- Always use the complete command path (e.g., `yarn test:all`) from the correct directory
+- Never run test commands from the project root as they won't be found
+
+## Directory Context Checking
+- Always include directory context in command explanations
+- Verify directory context before each terminal command
+- If a command fails, first check if you're in the correct directory 
