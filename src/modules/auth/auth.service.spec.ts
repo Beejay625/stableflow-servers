@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AlchemyAAService } from '../../common/utils/alchemy';
 import { UnauthorizedException } from '@nestjs/common';
+import { EncryptionService } from '../../common/utils/encryption.service';
 
 describe('AuthService', () => {
   let authService: AuthService;
@@ -17,6 +18,11 @@ describe('AuthService', () => {
   const mockAlchemyService = {
     encryptData: jest.fn(),
     decryptData: jest.fn()
+  };
+
+  const mockEncryptionService = {
+    encrypt: jest.fn(),
+    decrypt: jest.fn()
   };
 
   beforeEach(async () => {
@@ -36,6 +42,10 @@ describe('AuthService', () => {
         {
           provide: AlchemyAAService,
           useValue: mockAlchemyService
+        },
+        {
+          provide: EncryptionService,
+          useValue: mockEncryptionService
         }
       ]
     }).compile();

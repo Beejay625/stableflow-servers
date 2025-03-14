@@ -3,7 +3,6 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { AlchemyAAService } from '../../common/utils/alchemy';
 import { MailService } from '../../common/utils/email';
 
 describe('AuthController', () => {

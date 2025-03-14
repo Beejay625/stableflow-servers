@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RedisService } from './redis.service';
 import Redis from 'ioredis';
 
@@ -23,20 +23,19 @@ describe('RedisService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [
-        RedisService,
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn().mockImplementation((key) => {
-              if (key === 'REDIS_HOST') return 'test-host';
-              if (key === 'REDIS_PORT') return 6379;
-              if (key === 'REDIS_PASSWORD') return 'test-password';
-              return undefined;
-            })
-          }
-        }
-      ]
+      imports: [
+        ConfigModule.forRoot({
+          load: [() => ({
+            redis: {
+              host: 'test-host',
+              port: 6379,
+              password: 'test-password'
+            }
+          })],
+          isGlobal: true
+        })
+      ],
+      providers: [RedisService]
     }).compile();
 
     service = module.get<RedisService>(RedisService);
