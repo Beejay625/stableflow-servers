@@ -5,9 +5,9 @@ import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
-import { AlchemyAAService } from '../../common/utils/alchemy';
 import { EncryptionService } from '../../common/utils/encryption.service';
 import { User } from './entities/auth.entity';
+import { RedisModule } from '../redis/redis.module';
 
 @Module({
   imports: [
@@ -20,9 +20,10 @@ import { User } from './entities/auth.entity';
         signOptions: { expiresIn: '24h' },
       }),
     }),
+    RedisModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, MailService, AlchemyAAService, EncryptionService],
+  providers: [AuthService, MailService, EncryptionService],
   exports: [AuthService],
 })
 export class AuthModule {}

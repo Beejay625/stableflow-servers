@@ -1,27 +1,46 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { AlchemyAAService } from '../../common/utils/alchemy';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './entities/auth.entity';
+import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class AuthService {
-  private otpStore: Map<string, { otp: string; expiresAt: Date }> = new Map();
-
   constructor(
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly alchemyService: AlchemyAAService
+    private readonly redisService: RedisService
   ) {}
 
   async generateOtp(email: string) {
     // Generate a 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     
-    // Store OTP with expiration (15 minutes)
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 15);
+    // Set OTP expiration (15 minutes)
+    const expirationInSeconds = 15 * 60; // 15 minutes
     
-    this.otpStore.set(email, { otp, expiresAt });
+    // Find or create user
+    let user = await this.userRepository.findOne({ where: { email } });
+    
+    if (!user) {
+      // Create new user if not exists
+      user = this.userRepository.create({
+        email,
+        isActive: true
+      });
+      await this.userRepository.save(user);
+    }
+    
+    // Store OTP in Redis instead of the database
+    const redisClient = this.redisService.getClient();
+    const redisKey = `otp:${email}`;
+    
+    // Store OTP in Redis with expiration using ioredis syntax
+    await redisClient.set(redisKey, otp, 'EX', expirationInSeconds);
     
     // In a real application, you would send this OTP via email or SMS
     console.log(`OTP for ${email}: ${otp}`);
@@ -30,35 +49,40 @@ export class AuthService {
   }
 
   async verifyOtp(email: string, otp: string) {
-    const storedData = this.otpStore.get(email);
+    // Find user by email
+    const user = await this.userRepository.findOne({ where: { email } });
     
-    if (!storedData) {
+    if (!user) {
       throw new UnauthorizedException('Authentication failed.');
     }
     
-    const { otp: storedOtp, expiresAt } = storedData;
+    // Get OTP from Redis
+    const redisClient = this.redisService.getClient();
+    const redisKey = `otp:${email}`;
+    const storedOtp = await redisClient.get(redisKey);
     
-    // Check if OTP has expired
-    if (new Date() > expiresAt) {
-      this.otpStore.delete(email);
-      throw new UnauthorizedException('Authentication failed.');
+    if (!storedOtp) {
+      throw new UnauthorizedException('OTP has expired or does not exist.');
     }
     
     // Verify OTP
     if (otp !== storedOtp) {
-      throw new UnauthorizedException('Authentication failed.');
+      throw new UnauthorizedException('Invalid OTP.');
     }
     
-    // Clear OTP after successful verification
-    this.otpStore.delete(email);
+    // Delete OTP from Redis after successful verification
+    await redisClient.del(redisKey);
     
-    // Generate token (in a real implementation, you would create or find a user here)
-    const token = this.jwtService.sign({ email });
+    // Generate token
+    const token = this.jwtService.sign({ userId: user.id, email: user.email });
     
     return { 
       message: 'Authentication successful', 
       token, 
-      user: { email } 
+      user: { 
+        id: user.id,
+        email: user.email 
+      } 
     };
   }
 } 

@@ -10,7 +10,6 @@
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start --watch",
-    "postbuild": "cp src/common/utils/alchemy-wrapper.mjs dist/common/utils/alchemy-wrapper.mjs",
     "start:dev": "cross-env NODE_ENV=development nest start --watch",
     "start:staging": "cross-env NODE_ENV=staging nest start --watch",
     "start:debug": "cross-env NODE_ENV=development nest start --debug --watch",
@@ -28,9 +27,6 @@
     "migration:revert": "yarn typeorm migration:revert -d src/config/db.config.ts"
   },
   "dependencies": {
-    "@aa-sdk/core": "^4.13.0",
-    "@account-kit/infra": "^4.13.0",
-    "@account-kit/smart-contracts": "^4.13.0",
     "@nestjs/bull": "^11.0.2",
     "@nestjs/common": "^11.0.11",
     "@nestjs/config": "^4.0.0",

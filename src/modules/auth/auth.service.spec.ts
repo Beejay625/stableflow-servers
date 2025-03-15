@@ -1,136 +1,193 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { AuthService } from './auth.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { AuthService } from './auth.service';
-import { AlchemyAAService } from '../../common/utils/alchemy';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from './entities/auth.entity';
 import { UnauthorizedException } from '@nestjs/common';
-import { EncryptionService } from '../../common/utils/encryption.service';
+import { RedisService } from '../redis/redis.service';
 
 describe('AuthService', () => {
-  let authService: AuthService;
+  let service: AuthService;
   let jwtService: JwtService;
-  let alchemyService: AlchemyAAService;
+  let configService: ConfigService;
+  let userRepository: Repository<User>;
+  let redisService: RedisService;
 
   const mockJwtService = {
-    sign: jest.fn().mockReturnValue('mock-token')
+    sign: jest.fn().mockReturnValue('test-token'),
   };
 
-  const mockAlchemyService = {
-    encryptData: jest.fn(),
-    decryptData: jest.fn()
+  const mockConfigService = {
+    get: jest.fn(),
   };
 
-  const mockEncryptionService = {
-    encrypt: jest.fn(),
-    decrypt: jest.fn()
+  const mockUserRepository = {
+    findOne: jest.fn(),
+    create: jest.fn(),
+    save: jest.fn(),
+  };
+
+  // Create a more realistic Redis mock
+  const mockRedisClient = {
+    set: jest.fn().mockImplementation(() => Promise.resolve('OK')),
+    get: jest.fn(),
+    del: jest.fn().mockImplementation(() => Promise.resolve(1)),
+    quit: jest.fn().mockImplementation(() => Promise.resolve('OK')),
+    connect: jest.fn().mockImplementation(() => Promise.resolve()),
+    ping: jest.fn().mockImplementation(() => Promise.resolve('PONG')),
+    on: jest.fn(),
+  };
+
+  const mockRedisService = {
+    getClient: jest.fn().mockReturnValue(mockRedisClient),
+    checkConnection: jest.fn().mockResolvedValue(true),
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         {
           provide: JwtService,
-          useValue: mockJwtService
+          useValue: mockJwtService,
         },
         {
           provide: ConfigService,
-          useValue: {
-            get: jest.fn()
-          }
+          useValue: mockConfigService,
         },
         {
-          provide: AlchemyAAService,
-          useValue: mockAlchemyService
+          provide: getRepositoryToken(User),
+          useValue: mockUserRepository,
         },
         {
-          provide: EncryptionService,
-          useValue: mockEncryptionService
-        }
-      ]
+          provide: RedisService,
+          useValue: mockRedisService,
+        },
+      ],
     }).compile();
 
-    authService = module.get<AuthService>(AuthService);
+    service = module.get<AuthService>(AuthService);
     jwtService = module.get<JwtService>(JwtService);
-    alchemyService = module.get<AlchemyAAService>(AlchemyAAService);
+    configService = module.get<ConfigService>(ConfigService);
+    userRepository = module.get<Repository<User>>(getRepositoryToken(User));
+    redisService = module.get<RedisService>(RedisService);
+  });
 
-    // Reset all mocks
-    jest.clearAllMocks();
+  it('should be defined', () => {
+    expect(service).toBeDefined();
   });
 
   describe('generateOtp', () => {
-    it('should generate and store OTP for the provided email', async () => {
+    it('should generate a 6-digit OTP for existing user', async () => {
       const email = 'test@example.com';
-      const result = await authService.generateOtp(email);
+      const mockUser = new User();
+      mockUser.email = email;
+      
+      mockUserRepository.findOne.mockResolvedValue(mockUser);
+      
+      const result = await service.generateOtp(email);
       
       expect(result).toEqual({ message: 'OTP sent successfully.' });
-      // Verify OTP is stored by testing the verifyOtp method
-      const storedOtp = (authService as any).otpStore.get(email);
-      expect(storedOtp).toBeDefined();
-      expect(storedOtp.otp).toHaveLength(6);
-      expect(storedOtp.expiresAt).toBeInstanceOf(Date);
+      expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { email } });
+      expect(mockRedisClient.set).toHaveBeenCalled();
+      
+      // Verify Redis key format and expiration
+      const redisSetCall = mockRedisClient.set.mock.calls[0];
+      expect(redisSetCall[0]).toBe(`otp:${email}`);
+      expect(redisSetCall[1]).toMatch(/^\d{6}$/);
+      expect(redisSetCall[2]).toBe('EX');
+      expect(redisSetCall[3]).toBe(15 * 60); // 15 minutes in seconds
+    });
+    
+    it('should create a new user if not exists', async () => {
+      const email = 'new@example.com';
+      const mockUser = new User();
+      mockUser.email = email;
+      
+      mockUserRepository.findOne.mockResolvedValue(null);
+      mockUserRepository.create.mockReturnValue(mockUser);
+      mockUserRepository.save.mockImplementation(user => Promise.resolve(user));
+      
+      const result = await service.generateOtp(email);
+      
+      expect(result).toEqual({ message: 'OTP sent successfully.' });
+      expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { email } });
+      expect(mockUserRepository.create).toHaveBeenCalled();
+      expect(mockUserRepository.save).toHaveBeenCalled();
+      expect(mockRedisClient.set).toHaveBeenCalled();
     });
   });
 
   describe('verifyOtp', () => {
-    it('should verify valid OTP and return token', async () => {
+    it('should throw an error if user does not exist', async () => {
+      const email = 'nonexistent@example.com';
+      const otp = '123456';
+      
+      mockUserRepository.findOne.mockResolvedValue(null);
+      
+      await expect(service.verifyOtp(email, otp)).rejects.toThrow(UnauthorizedException);
+      expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { email } });
+    });
+    
+    it('should throw an error if OTP has expired or does not exist', async () => {
       const email = 'test@example.com';
       const otp = '123456';
       
-      // Manually set OTP for testing
-      const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + 15);
-      (authService as any).otpStore.set(email, { otp, expiresAt });
+      const mockUser = new User();
+      mockUser.email = email;
       
-      const result = await authService.verifyOtp(email, otp);
+      mockUserRepository.findOne.mockResolvedValue(mockUser);
+      mockRedisClient.get.mockResolvedValue(null); // OTP not found in Redis
+      
+      await expect(service.verifyOtp(email, otp)).rejects.toThrow('OTP has expired or does not exist.');
+      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
+    });
+    
+    it('should throw an error if OTP is invalid', async () => {
+      const email = 'test@example.com';
+      const otp = '123456';
+      const storedOtp = '654321'; // Different OTP
+      
+      const mockUser = new User();
+      mockUser.email = email;
+      
+      mockUserRepository.findOne.mockResolvedValue(mockUser);
+      mockRedisClient.get.mockResolvedValue(storedOtp);
+      
+      await expect(service.verifyOtp(email, otp)).rejects.toThrow('Invalid OTP.');
+      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
+    });
+    
+    it('should return a token if OTP is valid', async () => {
+      const email = 'test@example.com';
+      const otp = '123456';
+      const userId = 'user-id-123';
+      
+      const mockUser = new User();
+      mockUser.id = userId;
+      mockUser.email = email;
+      
+      mockUserRepository.findOne.mockResolvedValue(mockUser);
+      mockRedisClient.get.mockResolvedValue(otp); // Same OTP in Redis
+      
+      const result = await service.verifyOtp(email, otp);
       
       expect(result).toEqual({
         message: 'Authentication successful',
-        token: 'mock-token',
-        user: { email }
+        token: 'test-token',
+        user: {
+          id: userId,
+          email
+        }
       });
-      expect(mockJwtService.sign).toHaveBeenCalledWith({ email });
       
-      // Verify OTP is deleted after successful verification
-      expect((authService as any).otpStore.has(email)).toBe(false);
-    });
-    
-    it('should throw UnauthorizedException if OTP is not found', async () => {
-      await expect(authService.verifyOtp('nonexistent@example.com', '123456'))
-        .rejects.toThrow(new UnauthorizedException('Authentication failed.'));
-    });
-    
-    it('should throw UnauthorizedException if OTP is expired', async () => {
-      const email = 'test@example.com';
-      const otp = '123456';
-      
-      // Set expired OTP
-      const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() - 1); // 1 minute in the past
-      (authService as any).otpStore.set(email, { otp, expiresAt });
-      
-      await expect(authService.verifyOtp(email, otp))
-        .rejects.toThrow(new UnauthorizedException('Authentication failed.'));
-      
-      // Verify expired OTP is deleted
-      expect((authService as any).otpStore.has(email)).toBe(false);
-    });
-    
-    it('should throw UnauthorizedException if OTP is incorrect', async () => {
-      const email = 'test@example.com';
-      const correctOtp = '123456';
-      const wrongOtp = '654321';
-      
-      // Set valid OTP
-      const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + 15);
-      (authService as any).otpStore.set(email, { otp: correctOtp, expiresAt });
-      
-      await expect(authService.verifyOtp(email, wrongOtp))
-        .rejects.toThrow(new UnauthorizedException('Authentication failed.'));
-      
-      // OTP should still exist after failed verification
-      expect((authService as any).otpStore.has(email)).toBe(true);
+      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
+      expect(mockRedisClient.del).toHaveBeenCalledWith(`otp:${email}`);
+      expect(jwtService.sign).toHaveBeenCalledWith({ userId, email });
     });
   });
 }); 

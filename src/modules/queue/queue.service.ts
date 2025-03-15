@@ -1,19 +1,32 @@
-import { Injectable, Inject, Logger } from "@nestjs/common";
-import { IQueueService } from "./queue.interface";
+import { Injectable, Logger } from "@nestjs/common";
+import { Queue } from "bullmq";
+import { RedisService } from "../redis/redis.service";
 import { QueueError } from "./queue.error";
 
 /**
- * Service for managing queue operations.
- * Uses dependency injection to allow for different queue implementations.
+ * Service for managing queue operations using Redis/BullMQ
  */
 @Injectable()
 export class QueueService {
   private readonly logger = new Logger(QueueService.name);
+  private queues: Map<string, Queue> = new Map();
 
-  constructor(
-    @Inject("QueueService")
-    private readonly queueProvider: IQueueService
-  ) {}
+  constructor(private readonly redisService: RedisService) {}
+
+  /**
+   * Gets or creates a queue instance for the given queue name.
+   * @param queueName - The name of the queue
+   * @returns Queue instance
+   * @private
+   */
+  private getQueue(queueName: string): Queue {
+    try {
+      return this.redisService.getQueue(queueName);
+    } catch (error) {
+      this.logger.error(`Failed to get queue ${queueName}`, error.stack);
+      throw new QueueError(`Failed to get queue: ${error.message}`);
+    }
+  }
 
   /**
    * Adds a job to the specified queue.
@@ -22,13 +35,11 @@ export class QueueService {
    * @param data - The data payload for the job
    * @throws {QueueError} If the job cannot be added to the queue
    */
-  async addJob(queueName: string, jobName: string, data: any): Promise<void> {
+  async addJob(queueName: string, jobName: string, data: any): Promise<any> {
     try {
-      await this.queueProvider.addJob(queueName, jobName, data);
-      this.logger.debug(
-        `Job added to ${queueName}: ${jobName}`,
-        JSON.stringify(data)
-      );
+      const job = await this.getQueue(queueName).add(jobName, data);
+      this.logger.debug(`Job added to ${queueName}: ${jobName}`, JSON.stringify(data));
+      return job;
     } catch (error) {
       this.logger.error(
         `Failed to add job to ${queueName}: ${jobName}`,
@@ -47,12 +58,11 @@ export class QueueService {
   async addBulk(
     queueName: string,
     jobs: { name: string; data: any }[]
-  ): Promise<void> {
+  ): Promise<any[]> {
     try {
-      await this.queueProvider.addBulk(queueName, jobs);
-      this.logger.debug(
-        `Bulk jobs added to ${queueName}: ${jobs.length} jobs`
-      );
+      const addedJobs = await this.getQueue(queueName).addBulk(jobs);
+      this.logger.debug(`Bulk jobs added to ${queueName}: ${jobs.length} jobs`);
+      return addedJobs;
     } catch (error) {
       this.logger.error(
         `Failed to add bulk jobs to ${queueName}`,

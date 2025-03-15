@@ -1,0 +1,6 @@
+---
+description: update-folder
+globs: 
+alwaysApply: true
+---
+when I use /update-module just Maintain a complete record of all work done in each module in it @track-implementaion file for every module . Update it whenever the module changes to track as we working .

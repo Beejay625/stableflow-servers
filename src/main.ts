@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import envConfig from './config/env.config';
 import { ValidationPipe } from './common/pipes/validation.pipe';
+import { RedisService } from './modules/redis/redis.service';
 
 import * as dotenv from 'dotenv';
 
@@ -29,6 +30,12 @@ async function bootstrap() {
     } else if (environment === 'PRODUCTION') {
       logger.log('Production environment - running with optimized settings');
     }
+    
+    // Check Redis connection before proceeding
+    logger.log('Checking Redis connection...');
+    const redisService = app.get(RedisService);
+    await redisService.checkConnection();
+    logger.log('Redis connection verified ✅');
     
     app.enableCors();
     app.useGlobalPipes(new ValidationPipe());

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { RedisQueueService } from './redis.queue.service';
-import { RedisService } from '../../redis/redis.service';
+import { RedisService } from '../redis/redis.service';
 import { QueueError } from '../../common/exceptions/queue.exception';
 import { Queue } from 'bullmq';
 

@@ -18,10 +18,6 @@ describe('AuthController', () => {
     sign: jest.fn()
   };
 
-  const mockAlchemyService = {
-    createSmartWallet: jest.fn()
-  };
-
   const mockMailService = {
     sendMail: jest.fn()
   };
@@ -43,10 +39,6 @@ describe('AuthController', () => {
           useValue: {
             get: jest.fn()
           }
-        },
-        {
-          provide: AlchemyAAService,
-          useValue: mockAlchemyService
         },
         {
           provide: MailService,

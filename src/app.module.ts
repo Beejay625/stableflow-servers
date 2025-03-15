@@ -1,10 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { CloudinaryProvider } from './modules/cloudinary/cloudinary.provider';
 import { QueueModule } from './modules/queue/queue.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { DatabaseModule } from './database/database.module';
-import { RedisModule } from './redis/redis.module';
+import { RedisModule } from './modules/redis/redis.module';
 
 @Module({
   imports: [
@@ -17,7 +16,7 @@ import { RedisModule } from './redis/redis.module';
     AuthModule,
     RedisModule
   ],
-  providers: [CloudinaryProvider],
-  exports: [CloudinaryProvider]
+  providers: [],
+  exports: []
 })
 export class AppModule {}
