@@ -5,6 +5,7 @@ import { Business, OnboardingStep, AccountType } from './entities/business.entit
 // Import the Category entity class but use it only for type checking
 import { Category } from './entities/category.entity';
 import { CreateBusinessDto } from './dto/create-business.dto';
+import { UpdateBusinessDto } from './dto/update-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse } from './interfaces/business.interface';
 import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';
@@ -180,22 +181,88 @@ export class BusinessService {
    * @param ownerId ID of the requesting user
    * @returns Updated business entity
    */
-  async updateBusiness(id: string, updateData: Partial<Business>, ownerId: string): Promise<Business> {
+  async updateBusiness(id: string, updateData: UpdateBusinessDto, ownerId: string): Promise<SimplifiedBusinessResponseDto> {
+    this.logger.log(`Updating business with ID ${id} for owner ${ownerId}`);
+    
+    // Find business with relations
     const business = await this.businessRepository.findOne({
       where: { id, ownerId },
+      relations: ['category']
     });
 
     if (!business) {
       throw new NotFoundException(`Business with ID ${id} not found`);
     }
 
-    // Merge update data with existing business
-    const updatedBusiness = {
-      ...business,
-      ...updateData,
+    // Handle category creation or update if needed
+    let category: Category | undefined;
+    if (updateData.categoryId || updateData.categoryName) {
+      if (updateData.categoryId) {
+        // Find existing category
+        category = await this.categoryRepository.findOne({ 
+          where: { id: updateData.categoryId } 
+        });
+
+        if (!category) {
+          throw new NotFoundException(`Category with ID ${updateData.categoryId} not found`);
+        }
+      } else if (updateData.categoryName) {
+        // Check if category with this name already exists
+        category = await this.categoryRepository.findOne({ 
+          where: { name: updateData.categoryName } 
+        });
+
+        // Create new custom category if it doesn't exist
+        if (!category) {
+          category = this.categoryRepository.create({
+            name: updateData.categoryName,
+            isCustom: true,
+          });
+          category = await this.categoryRepository.save(category);
+        }
+      }
+    }
+
+    // Determine if this update advances the onboarding step
+    let onboardingStep = business.onboardingStep;
+    
+    const hasName = updateData.name || business.name;
+    const hasPhoneNumber = updateData.phoneNumber || business.phoneNumber;
+    const hasDescription = updateData.description || business.description;
+    const hasCategory = category?.id || business.categoryId;
+    const hasBasicDetails = hasName && hasPhoneNumber && hasDescription && hasCategory;
+    
+    if (hasBasicDetails && onboardingStep === OnboardingStep.NOT_STARTED) {
+      onboardingStep = OnboardingStep.BUSINESS_SETUP;
+    }
+
+    // Create updated business object
+    const updatedData: Partial<Business> = {
+      ...updateData
     };
 
-    return this.businessRepository.save(updatedBusiness);
+    // Only set category if it was updated
+    if (category) {
+      updatedData.category = category;
+      updatedData.categoryId = category.id;
+    }
+
+    // Update onboarding step if it changed
+    if (onboardingStep !== business.onboardingStep) {
+      updatedData.onboardingStep = onboardingStep;
+    }
+    
+    // Remove categoryName from the update data since it's not a column in the entity
+    delete (updatedData as any).categoryName;
+
+    // Save updated business
+    const updatedBusiness = await this.businessRepository.save({
+      ...business,
+      ...updatedData
+    });
+
+    // Return simplified response
+    return this.toSimplifiedResponse(updatedBusiness);
   }
 
   /**
@@ -350,30 +417,28 @@ export class BusinessService {
   }
 
   /**
-   * Gets a paginated list of businesses for an owner
-   * @param ownerId ID of the requesting user
+   * Gets a paginated list of all businesses
    * @param page Page number (1-indexed)
    * @param limit Results per page
    * @returns Paginated list of simplified businesses
    */
   async getAllBusinesses(
-    ownerId: string, 
     page = 1, 
     limit = 10
   ): Promise<{ businesses: SimplifiedBusinessResponseDto[], total: number, page: number, limit: number }> {
-    this.logger.debug(`Fetching all businesses for owner: ${ownerId}, page: ${page}, limit: ${limit}`);
+    this.logger.debug(`Fetching all businesses, page: ${page}, limit: ${limit}`);
     
     const skip = (page - 1) * limit;
 
     const [businesses, total] = await Promise.all([
       this.businessRepository.find({
-        where: { ownerId },
+        where: { isActive: true }, // Only return active businesses
         relations: ['category'], // Include category relation for each business
         skip,
         take: limit,
         order: { createdAt: 'DESC' },
       }),
-      this.businessRepository.count({ where: { ownerId } }),
+      this.businessRepository.count({ where: { isActive: true } }),
     ]);
 
     // Check each business for automatic verification
@@ -405,7 +470,7 @@ export class BusinessService {
       })
     );
 
-    this.logger.debug(`Found ${businesses.length} businesses out of ${total} total for owner ${ownerId}`);
+    this.logger.debug(`Found ${businesses.length} businesses out of ${total} total`);
     
     // Convert entities to simplified DTOs
     const simplifiedBusinesses = updatedBusinesses.map(business => this.toSimplifiedResponse(business));
@@ -420,18 +485,45 @@ export class BusinessService {
 
   /**
    * Gets a list of all active categories
+   * @param name Optional name to filter categories by
    * @returns List of categories
    */
-  async getAllCategories(): Promise<CategoryListResponse> {
-    const categories = await this.categoryRepository.find({
-      where: { isActive: true },
-      order: { name: 'ASC' },
-    });
+  async getAllCategories(name?: string): Promise<CategoryListResponse> {
+    this.logger.log(`Fetching business categories${name ? ` with name: ${name}` : ''}`);
+    try {
+      let query = 'SELECT * FROM public.categories WHERE "isActive" = true';
+      
+      // Add name filter if provided
+      if (name) {
+        query += ` AND name = $1`;
+        const categories = await this.categoryRepository.query(query, [name]);
+        
+        this.logger.debug(`Found ${categories.length} active categories with name: ${name}`);
+        
+        return {
+          categories,
+          total: categories.length,
+        };
+      }
+      
+      // If no name filter, get all categories
+      query += ' ORDER BY name ASC';
+      const categories = await this.categoryRepository.query(query);
+      
+      this.logger.debug(`Found ${categories.length} active categories`);
 
-    return {
-      categories,
-      total: categories.length,
-    };
+      return {
+        categories,
+        total: categories.length,
+      };
+    } catch (error) {
+      this.logger.error(`Error fetching categories: ${error.message}`, error.stack);
+      // Return empty result on error
+      return {
+        categories: [],
+        total: 0,
+      };
+    }
   }
 
   /**

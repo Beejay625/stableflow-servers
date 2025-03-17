@@ -22,10 +22,12 @@ import {
   ApiBody,
   getSchemaPath,
   ApiExtraModels,
-  ApiBearerAuth
+  ApiBearerAuth,
+  ApiProperty
 } from '@nestjs/swagger';
 import { BusinessService } from './business.service';
 import { CreateBusinessDto } from './dto/create-business.dto';
+import { UpdateBusinessDto } from './dto/update-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';
 import { Business } from './entities/business.entity';
@@ -56,13 +58,54 @@ class BusinessResponseDto {
 }
 
 class CategoryDto {
+  @ApiProperty({
+    description: 'Category ID (UUID)',
+    example: 'dc03a60c-f585-4e26-8abd-df51976b739c'
+  })
   id: string;
+
+  @ApiProperty({
+    description: 'Category name',
+    example: 'Agriculture'
+  })
   name: string;
+
+  @ApiProperty({
+    description: 'Category description',
+    example: 'Farming, agriculture, and related services',
+    required: false
+  })
   description?: string;
+
+  @ApiProperty({
+    description: 'Whether this is a custom category created by a user',
+    example: false
+  })
   isCustom: boolean;
+
+  @ApiProperty({
+    description: 'Whether this category is active',
+    example: true
+  })
   isActive: boolean;
+
+  @ApiProperty({
+    description: 'Creation timestamp',
+    example: '2023-01-01T00:00:00Z'
+  })
   createdAt: Date;
+
+  @ApiProperty({
+    description: 'Last update timestamp',
+    example: '2023-01-01T00:00:00Z'
+  })
   updatedAt: Date;
+
+  @ApiProperty({
+    description: 'Associated businesses (not included in most responses)',
+    type: [Object],
+    required: false
+  })
   businesses?: any[];
 }
 
@@ -74,7 +117,18 @@ class BusinessListResponseDto {
 }
 
 class CategoryListResponseDto {
+  @ApiProperty({
+    description: 'List of business categories',
+    type: [CategoryDto],
+    isArray: true
+  })
   categories: CategoryDto[];
+
+  @ApiProperty({
+    description: 'Total number of categories',
+    example: 15,
+    type: Number
+  })
   total: number;
 }
 
@@ -109,6 +163,7 @@ class ErrorResponseDto {
 @ApiTags('Businesses')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard)
+@ApiExtraModels(BusinessResponseDto, CategoryDto, BusinessListResponseDto, CategoryListResponseDto, ErrorResponseDto, CurrencyDto, InstitutionDto, ExchangeRateResponseDto)
 @Controller('businesses')
 export class BusinessController {
   constructor(private readonly businessService: BusinessService) {}
@@ -171,10 +226,46 @@ export class BusinessController {
     description: 'Updates business information like name, description, etc.'
   })
   @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
-  @ApiBody({ type: CreateBusinessDto })
+  @ApiBody({ type: UpdateBusinessDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Business updated successfully',
+    type: SimplifiedBusinessResponseDto
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Business not found',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 404 },
+        message: { type: 'string', example: 'Business not found' },
+        error: { type: 'string', example: 'Not Found' }
+      }
+    }
+  })
+  @ApiResponse({ 
+    status: 400, 
+    description: 'Invalid input data',
+    content: {
+      'application/json': {
+        schema: { $ref: getSchemaPath(ErrorResponseDto) },
+        examples: {
+          invalidInput: {
+            summary: 'Invalid input data',
+            value: {
+              statusCode: 400,
+              message: 'categoryId must be a valid UUID format (e.g., 123e4567-e89b-12d3-a456-426614174000)',
+              error: 'Bad Request'
+            }
+          }
+        }
+      }
+    }
+  })
   async updateBusiness(
     @Param('id') id: string,
-    @Body() updateData: Partial<Business>,
+    @Body() updateData: UpdateBusinessDto,
     @Req() req
   ) {
     const ownerId = req.user.id;
@@ -210,7 +301,7 @@ export class BusinessController {
               accountName: 'John Doe',
               accountType: AccountType.POS,
               settlementCurrency: 'NGN',
-              categoryId: 'category-123',
+              categoryId: '123e4567-e89b-12d3-a456-426614174000',
               isActive: true,
               createdAt: '2023-01-01T00:00:00Z',
               updatedAt: '2023-01-01T12:34:56Z'
@@ -277,8 +368,8 @@ export class BusinessController {
 
   @Get()
   @ApiOperation({
-    summary: 'Get all businesses for the authenticated user',
-    description: 'Returns a paginated list of all businesses owned by the authenticated user'
+    summary: 'Get all businesses',
+    description: 'Returns a paginated list of all businesses on the platform (requires authentication)'
   })
   @ApiQuery({ name: 'page', description: 'Page number', type: 'number', required: false })
   @ApiQuery({ name: 'limit', description: 'Items per page', type: 'number', required: false })
@@ -306,59 +397,97 @@ export class BusinessController {
     }
   })
   async getAllBusinesses(
-    @Req() req,
     @Query('page') page?: number,
     @Query('limit') limit?: number
   ) {
-    const ownerId = req.user.id;
-    return this.businessService.getAllBusinesses(ownerId, page, limit);
+    return this.businessService.getAllBusinesses(page, limit);
   }
 
   @Get('categories/all')
   @Public()
   @ApiOperation({
     summary: 'Get all business categories',
-    description: 'Returns a list of all available business categories'
+    description: 'Returns a list of all available business categories. Can filter by name if provided.'
+  })
+  @ApiQuery({ 
+    name: 'name', 
+    required: false,
+    description: 'Filter categories by name (optional)'
   })
   @ApiResponse({ 
     status: 200, 
-    description: 'Return all business categories.',
+    description: 'Return all business categories or a single category if name is provided.',
+    type: CategoryListResponseDto,
     content: {
       'application/json': {
-        schema: { $ref: getSchemaPath(CategoryListResponseDto) },
+        schema: {
+          $ref: getSchemaPath(CategoryListResponseDto)
+        },
         examples: {
           categoryList: {
             summary: 'List of categories',
             value: {
               categories: [
                 {
-                  id: 'category-123',
+                  id: 'dc03a60c-f585-4e26-8abd-df51976b739c',
+                  name: 'Agriculture',
+                  description: 'Farming, agriculture, and related services',
+                  isCustom: false,
+                  isActive: true
+                },
+                {
+                  id: '04426fb1-3b3f-4b32-8168-6ab89f78a3df',
+                  name: 'Beauty & Wellness',
+                  description: 'Salons, spas, fitness centers, and wellness services',
+                  isCustom: false,
+                  isActive: true
+                },
+                {
+                  id: '036df1d1-bf84-4fc3-8dcf-20c61a736150',
                   name: 'Retail',
-                  isCustom: false,
-                  isActive: true
-                },
-                {
-                  id: 'category-456',
-                  name: 'Food & Beverage',
-                  isCustom: false,
-                  isActive: true
-                },
-                {
-                  id: 'category-789',
-                  name: 'Technology',
+                  description: 'Physical or online stores selling products directly to consumers',
                   isCustom: false,
                   isActive: true
                 }
               ],
               total: 3
             }
+          },
+          singleCategory: {
+            summary: 'Single category when filtering by name',
+            value: {
+              categories: [
+                {
+                  id: 'dc03a60c-f585-4e26-8abd-df51976b739c',
+                  name: 'Agriculture',
+                  description: 'Farming, agriculture, and related services',
+                  isCustom: false,
+                  isActive: true
+                }
+              ],
+              total: 1
+            }
           }
         }
       }
     }
   })
-  async getAllCategories() {
-    return this.businessService.getAllCategories();
+  async getAllCategories(@Query('name') name?: string) {
+    const result = await this.businessService.getAllCategories(name);
+    
+    // Map CategoryDetail[] to CategoryDto[]
+    const categoryDtos = result.categories.map(category => ({
+      id: category.id,
+      name: category.name,
+      description: category.description,
+      isCustom: category.isCustom,
+      isActive: category.isActive
+    }));
+    
+    return {
+      categories: categoryDtos,
+      total: result.total
+    };
   }
 
   @Post(':id/deactivate')

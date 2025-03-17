@@ -12,7 +12,7 @@ export const databaseConfig = (configService: ConfigService): TypeOrmModuleOptio
   database: configService.get<string>('DB_NAME'),
   autoLoadEntities: true, // Automatically load all entities registered by feature modules
   synchronize: process.env.NODE_ENV === 'development', // ❌ Should be disabled in production
-  ssl: { rejectUnauthorized: false },
+  ssl: false, // Disabled SSL for local development
   logging: process.env.NODE_ENV === 'development',
   extra: {
     // Connection pool settings
@@ -34,7 +34,7 @@ const dataSource = new DataSource({
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../migrations/**/*{.ts,.js}'],
   synchronize: false, // ✅ Use migrations instead of synchronize for schema changes
-  ssl: { rejectUnauthorized: false },
+  ssl: false, // Disabled SSL for local development
   logging: process.env.NODE_ENV === 'development',
   extra: {
     max: 20,

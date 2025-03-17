@@ -38,7 +38,7 @@ export class SimplifiedBusinessResponseDto {
  * Category information in simplified form
  */
 export class SimplifiedCategoryDto {
-  @ApiProperty({ example: 'category-123' })
+  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
   id: string;
 
   @ApiProperty({ example: 'Retail' })
