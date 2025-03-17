@@ -79,6 +79,30 @@ export class PaycrestService {
   }
 
   /**
+   * Get institutions filtered by currency code
+   * @param currencyCode Optional currency code to filter institutions
+   * @returns Array of institutions
+   */
+  async getInstitutions(currencyCode?: string): Promise<Institution[]> {
+    try {
+      this.logger.debug(`Getting institutions for currency: ${currencyCode || 'all'}`);
+      const response = await this.getSupportedInstitutions();
+      
+      if (!currencyCode) {
+        return response.data;
+      }
+      
+      // Filter institutions by currency code if provided
+      return response.data.filter(institution => 
+        institution.supportedCurrencies?.includes(currencyCode)
+      );
+    } catch (error) {
+      this.logger.error(`Error getting institutions for currency ${currencyCode}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
    * Get supported currencies
    * @returns Promise with list of supported currencies
    */

@@ -1,15 +1,19 @@
-import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/auth.entity';
 import { RedisService } from '../redis/redis.service';
-import { MailService } from '../../common/utils/email';
+import { MailService } from '../../common/utils';
+import { otpEmailTemplate } from '../../common/utils/email-templates';
 import { Business, OnboardingStep } from '../business/entities/business.entity';
+import { AuthResponseDto, BusinessAuthResponseDto } from './dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
@@ -21,7 +25,7 @@ export class AuthService {
     private readonly mailService: MailService
   ) {}
 
-  async generateOtp(email: string) {
+  async generateOtp(email: string): Promise<AuthResponseDto> {
     // Generate a 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     
@@ -52,42 +56,37 @@ export class AuthService {
     // For debugging purposes
     console.log(`OTP for ${email}: ${otp}`);
     
-    // Create OTP email template
-    const otpEmailHtml = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 5px;">
-        <div style="text-align: center; margin-bottom: 20px;">
-          <h1 style="color: #333;">Your One-Time Password</h1>
-        </div>
-        <div style="margin-bottom: 30px; color: #666; font-size: 16px; line-height: 1.5;">
-          <p>Hello,</p>
-          <p>You requested a one-time password (OTP) for StableFlow. Please use the following code to complete your authentication:</p>
-          <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 5px; margin: 20px 0; border-radius: 4px;">
-            ${otp}
-          </div>
-          <p>This code will expire in 15 minutes.</p>
-          <p>If you didn't request this OTP, please ignore this email.</p>
-          <p>Thank you,<br>The StableFlow Team</p>
-        </div>
-      </div>
-    `;
+    // Use the email template from our templates file
+    const html = otpEmailTemplate(otp);
     
     try {
       // Send OTP via email
       await this.mailService.sendMail(
         email,
         'Your StableFlow Verification Code',
-        {
-          html: otpEmailHtml,
-          text: `Your StableFlow verification code is: ${otp}. This code will expire in 15 minutes.`
-        },
-        'StableFlow'
+        { html }
       );
       
-      return { message: 'OTP sent successfully.' };
+      // Return success message
+      return {
+        token: 'otp_requested',
+        userId: 'pending_verification',
+        email: email,
+        role: 'pending',
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes from now
+      };
     } catch (error) {
       console.error('Failed to send OTP email:', error);
       // Still return success even if email fails, since we logged the OTP
-      return { message: 'OTP generated successfully, but email delivery may be delayed.' };
+      return {
+        token: 'otp_requested',
+        userId: 'pending_verification',
+        email: email,
+        role: 'pending',
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes from now
+      };
     }
   }
 
@@ -129,64 +128,102 @@ export class AuthService {
     };
   }
 
-  async verifyOtpWithBusinessId(email: string, otp: string) {
+  async verifyOtpWithBusinessId(email: string, otp: string): Promise<BusinessAuthResponseDto> {
+    this.logger.log(`Verifying OTP for ${email}`);
+    
     // Find user by email
     const user = await this.userRepository.findOne({ where: { email } });
     
     if (!user) {
-      throw new UnauthorizedException('Authentication failed.');
+      this.logger.warn(`Authentication failed: User with email ${email} not found`);
+      throw new UnauthorizedException('Invalid credentials');
     }
     
-    // Get OTP from Redis
-    const redisClient = this.redisService.getClient();
-    const redisKey = `otp:${email}`;
-    const storedOtp = await redisClient.get(redisKey);
-    
-    if (!storedOtp) {
-      throw new UnauthorizedException('OTP has expired or does not exist.');
-    }
+    this.logger.log(`User found: ${user.id}`);
     
     // Verify OTP
-    if (otp !== storedOtp) {
-      throw new UnauthorizedException('Invalid OTP.');
+    const storedOtp = await this.redisService.get(`otp:${email}`);
+    
+    if (!storedOtp || storedOtp !== otp) {
+      this.logger.warn(`Authentication failed: Invalid or expired OTP for ${email}`);
+      throw new UnauthorizedException('Invalid or expired OTP');
     }
     
-    // Delete OTP from Redis after successful verification
-    await redisClient.del(redisKey);
+    this.logger.log(`OTP verified successfully for ${email}`);
     
-    // Generate token
-    const token = this.jwtService.sign({ userId: user.id, email: user.email });
+    // Delete OTP after successful verification
+    await this.redisService.del(`otp:${email}`);
     
-    // Find existing business for this user or create a new one
+    // Find business associated with user
     let business = await this.businessRepository.findOne({ where: { ownerId: user.id } });
+    this.logger.log(`Business lookup result: ${JSON.stringify(business || 'null')}`);
     
-    // If no business exists, create a new one
+    let businessId = '';
+    
+    // If no business exists, create a new one for the user
     if (!business) {
-      business = this.businessRepository.create({
-        ownerId: user.id,
-        name: `Business for ${email}`,
-        phoneNumber: '',
-        onboardingStep: OnboardingStep.BUSINESS_SETUP,
-        description: null,
-        isVerified: false,
-        bankCode: null,
-        accountNumber: null,
-        accountName: null,
-        accountType: null,
-        settlementCurrency: null,
-        categoryId: null
-      });
-      business = await this.businessRepository.save(business);
+      this.logger.log(`No business found for user ${user.id}, creating new business...`);
+      try {
+        // Create a new business entity
+        const newBusiness = this.businessRepository.create({
+          name: `${user.email.split('@')[0]}'s Business`, // Default name based on email
+          phoneNumber: '0000000000', // Placeholder, will be updated during onboarding
+          ownerId: user.id,
+          onboardingStep: OnboardingStep.NOT_STARTED,
+          isActive: true,
+          isVerified: false
+        });
+        
+        // Save the new business
+        business = await this.businessRepository.save(newBusiness);
+        
+        if (!business || !business.id) {
+          throw new Error('Failed to create business entity');
+        }
+        
+        businessId = business.id;
+        this.logger.log(`Created new business with ID ${businessId} for user ${user.id}`);
+      } catch (error) {
+        this.logger.error(`Error creating business for user ${user.id}: ${error.message}`);
+        // Create a temporary business ID as fallback
+        businessId = `temp-${Date.now()}`;
+        this.logger.log(`Created temporary business ID: ${businessId}`);
+      }
+    } else {
+      businessId = business.id;
+      this.logger.log(`Found existing business ID ${businessId} for user ${user.id}`);
     }
     
-    return { 
-      message: 'Authentication successful', 
-      token, 
-      user: { 
-        id: user.id,
-        email: user.email 
-      },
-      businessId: business.id
+    // Double-check the business ID
+    if (!businessId) {
+      this.logger.warn(`Business ID is still empty after processing. Generating temporary ID.`);
+      businessId = `temp-${Date.now()}`;
+    }
+    
+    // Generate token with business ID included
+    const token = this.jwtService.sign({ 
+      userId: user.id, 
+      email: user.email,
+      businessId: businessId
+    });
+    
+    // Calculate token expiration (24 hours from now)
+    const issuedAt = new Date();
+    const expiresAt = new Date(issuedAt.getTime() + 24 * 60 * 60 * 1000); // 24 hours
+    
+    const response: BusinessAuthResponseDto = { 
+      token,
+      userId: user.id,
+      email: user.email,
+      role: 'user',
+      issuedAt,
+      expiresAt,
+      businessId: businessId
     };
+    
+    this.logger.log(`Authentication successful for ${email} with business ID: ${businessId}`);
+    this.logger.log(`Response object: ${JSON.stringify(response)}`);
+    
+    return response;
   }
 } 

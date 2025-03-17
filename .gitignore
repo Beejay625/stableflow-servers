@@ -1,1 +1,74 @@
-.qodo
+# Dependency directories
+node_modules/
+.pnpm-store/
+
+# Build outputs
+/dist
+/build
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IDE - JetBrains/IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Coverage directory
+coverage/
+.nyc_output/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Mac OS
+.DS_Store
+
+# Project specific
+.qodo/
+.cursor/
+
+# Temp files
+tmp/
+temp/
+
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+
+# Testing
+/jest-results/

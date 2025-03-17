@@ -126,6 +126,26 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Get a value from Redis
+   * @param key - Key to get
+   * @returns Promise<string | null>
+   */
+  async get(key: string): Promise<string | null> {
+    const client = this.getClient();
+    return client.get(key);
+  }
+  
+  /**
+   * Delete a key from Redis
+   * @param key - Key to delete
+   * @returns Promise<number> - Number of keys deleted
+   */
+  async del(key: string): Promise<number> {
+    const client = this.getClient();
+    return client.del(key);
+  }
+
   getQueue(name: string, options?: Partial<QueueOptions>): Queue {
     if (!this.queues.has(name)) {
       const defaultOptions: QueueOptions = {

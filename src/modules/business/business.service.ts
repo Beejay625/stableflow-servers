@@ -7,6 +7,7 @@ import { Category } from './entities/category.entity';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse } from './interfaces/business.interface';
+import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';
 import { PaycrestService } from '../paycrest/paycrest.service';
 import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../paycrest/interfaces';
 
@@ -121,39 +122,26 @@ export class BusinessService {
   /**
    * Retrieves a business by ID
    * @param id Business ID
-   * @param ownerId ID of the user who owns the business
-   * @returns Complete business entity with all related data
+   * @param ownerId ID of the user who owns the business (optional for public access)
+   * @returns Simplified business entity with essential data
    */
-  async getBusinessById(id: string, ownerId: string): Promise<Business> {
-    this.logger.debug(`Fetching business with ID: ${id} for owner: ${ownerId}`);
+  async getBusinessById(id: string, ownerId?: string): Promise<SimplifiedBusinessResponseDto> {
+    this.logger.debug(`Fetching business with ID: ${id}${ownerId ? ` for owner: ${ownerId}` : ' (public access)'}`);
     
-    // Find the business with all relations
+    // Create where clause based on whether ownerId is provided
+    const whereClause: any = { id };
+    if (ownerId) {
+      whereClause.ownerId = ownerId;
+    }
+    
+    // Find the business with category relation only (no need for owner details)
     const business = await this.businessRepository.findOne({
-      where: { id, ownerId },
-      relations: ['category', 'owner'], // Include all available relations
-      select: {
-        // Explicitly select all fields to ensure everything is returned
-        id: true,
-        name: true,
-        phoneNumber: true,
-        description: true,
-        isVerified: true,
-        onboardingStep: true,
-        bankCode: true,
-        accountNumber: true,
-        accountName: true,
-        accountType: true,
-        settlementCurrency: true,
-        categoryId: true,
-        ownerId: true,
-        isActive: true,
-        createdAt: true, 
-        updatedAt: true
-      }
+      where: whereClause,
+      relations: ['category'],
     });
 
     if (!business) {
-      this.logger.warn(`Business with ID ${id} not found for owner ${ownerId}`);
+      this.logger.warn(`Business with ID ${id} not found${ownerId ? ` for owner ${ownerId}` : ''}`);
       throw new NotFoundException(`Business with ID ${id} not found`);
     }
 
@@ -179,8 +167,10 @@ export class BusinessService {
       await this.businessRepository.save(business);
     }
 
-    this.logger.debug(`Found business: ${business.name} with complete details`);
-    return business;
+    this.logger.debug(`Found business: ${business.name}. Converting to simplified format.`);
+    
+    // Transform business entity to simplified DTO
+    return this.toSimplifiedResponse(business);
   }
 
   /**
@@ -364,9 +354,13 @@ export class BusinessService {
    * @param ownerId ID of the requesting user
    * @param page Page number (1-indexed)
    * @param limit Results per page
-   * @returns Paginated list of businesses
+   * @returns Paginated list of simplified businesses
    */
-  async getAllBusinesses(ownerId: string, page = 1, limit = 10): Promise<BusinessListResponse> {
+  async getAllBusinesses(
+    ownerId: string, 
+    page = 1, 
+    limit = 10
+  ): Promise<{ businesses: SimplifiedBusinessResponseDto[], total: number, page: number, limit: number }> {
     this.logger.debug(`Fetching all businesses for owner: ${ownerId}, page: ${page}, limit: ${limit}`);
     
     const skip = (page - 1) * limit;
@@ -375,25 +369,6 @@ export class BusinessService {
       this.businessRepository.find({
         where: { ownerId },
         relations: ['category'], // Include category relation for each business
-        select: {
-          // Explicitly select all fields for completeness
-          id: true,
-          name: true,
-          phoneNumber: true,
-          description: true,
-          isVerified: true,
-          onboardingStep: true,
-          bankCode: true,
-          accountNumber: true,
-          accountName: true,
-          accountType: true,
-          settlementCurrency: true,
-          categoryId: true,
-          ownerId: true,
-          isActive: true,
-          createdAt: true, 
-          updatedAt: true
-        },
         skip,
         take: limit,
         order: { createdAt: 'DESC' },
@@ -432,8 +407,11 @@ export class BusinessService {
 
     this.logger.debug(`Found ${businesses.length} businesses out of ${total} total for owner ${ownerId}`);
     
+    // Convert entities to simplified DTOs
+    const simplifiedBusinesses = updatedBusinesses.map(business => this.toSimplifiedResponse(business));
+    
     return {
-      businesses: updatedBusinesses,
+      businesses: simplifiedBusinesses,
       total,
       page,
       limit,
@@ -488,18 +466,14 @@ export class BusinessService {
   }
 
   /**
-   * Gets a list of supported financial institutions for a specific currency
-   * @param currencyCode The currency code to get institutions for
-   * @returns List of supported institutions
+   * Get all supported financial institutions for a specific currency
+   * @param currencyCode Optional currency code to filter institutions
+   * @returns Array of institutions supported by the payment processor
    */
-  async getSupportedInstitutions(): Promise<Institution[]> {
-    try {
-      const response = await this.paycrestService.getSupportedInstitutions();
-      return response.data;
-    } catch (error) {
-      this.logger.error(`Failed to fetch institutions: ${error.message}`, error.stack);
-      throw new BadRequestException(`Failed to fetch institutions: ${error.message}`);
-    }
+  async getSupportedInstitutions(currencyCode?: string): Promise<Institution[]> {
+    this.logger.log(`Fetching supported institutions for currency: ${currencyCode || 'all'}`);
+    const institutions = await this.paycrestService.getInstitutions(currencyCode);
+    return institutions;
   }
 
   /**
@@ -542,5 +516,25 @@ export class BusinessService {
       this.logger.error(`Failed to get exchange rate: ${error.message}`, error.stack);
       throw new BadRequestException(`Failed to get exchange rate: ${error.message}`);
     }
+  }
+
+  /**
+   * Helper method to transform a business entity to a simplified response DTO
+   * @param business The business entity to transform
+   * @returns SimplifiedBusinessResponseDto
+   */
+  private toSimplifiedResponse(business: Business): SimplifiedBusinessResponseDto {
+    const simplified = new SimplifiedBusinessResponseDto();
+    simplified.id = business.id;
+    simplified.name = business.name;
+    simplified.phoneNumber = business.phoneNumber;
+    simplified.isVerified = business.isVerified;
+    simplified.onboardingStep = business.onboardingStep;
+    simplified.settlementCurrency = business.settlementCurrency;
+    simplified.isActive = business.isActive;
+    simplified.createdAt = business.createdAt;
+    simplified.updatedAt = business.updatedAt;
+    
+    return simplified;
   }
 } 

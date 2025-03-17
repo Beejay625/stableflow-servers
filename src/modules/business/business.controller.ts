@@ -10,7 +10,8 @@ import {
   HttpStatus, 
   Req,
   UseGuards,
-  Patch
+  Patch,
+  UnauthorizedException
 } from '@nestjs/common';
 import { 
   ApiTags, 
@@ -20,17 +21,21 @@ import {
   ApiQuery, 
   ApiBody,
   getSchemaPath,
-  ApiExtraModels
+  ApiExtraModels,
+  ApiBearerAuth
 } from '@nestjs/swagger';
 import { BusinessService } from './business.service';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
+import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';
 import { Business } from './entities/business.entity';
 import { BusinessDetail, BusinessListResponse, CategoryListResponse, ExchangeRateResponse } from './interfaces/business.interface';
 import { OnboardingStep, AccountType } from './entities/business.entity';
+import { JwtAuthGuard } from '../../common/guards';
+import { Public } from '../../common/decorators';
 
 // Create classes for API documentation
-class BusinessResponseDto implements Partial<Business> {
+class BusinessResponseDto {
   id: string;
   name: string;
   phoneNumber: string;
@@ -53,8 +58,12 @@ class BusinessResponseDto implements Partial<Business> {
 class CategoryDto {
   id: string;
   name: string;
+  description?: string;
   isCustom: boolean;
   isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  businesses?: any[];
 }
 
 class BusinessListResponseDto {
@@ -97,91 +106,55 @@ class ErrorResponseDto {
   error: string;
 }
 
-@ApiTags('businesses')
-@ApiExtraModels(
-  BusinessResponseDto, 
-  CategoryDto, 
-  BusinessListResponseDto, 
-  CategoryListResponseDto, 
-  CurrencyDto,
-  InstitutionDto,
-  ExchangeRateResponseDto,
-  ErrorResponseDto
-)
+@ApiTags('Businesses')
+@ApiBearerAuth('access-token')
+@UseGuards(JwtAuthGuard)
 @Controller('businesses')
 export class BusinessController {
   constructor(private readonly businessService: BusinessService) {}
 
   @Get(':id')
-  @ApiOperation({ 
-    summary: 'Get a business by ID', 
-    description: 'Retrieves complete business information by ID for the authenticated user. Returns all details about the business including bank account info, verification status, etc.'
+  @ApiOperation({
+    summary: 'Get a business by ID',
+    description: 'Returns business details for the specified ID',
   })
-  @ApiParam({ 
-    name: 'id', 
-    description: 'Business ID',
+  @ApiParam({
+    name: 'id',
     type: 'string',
-    example: 'business-123'
+    description: 'Business ID',
+    required: true
   })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Return the business with complete details.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(BusinessResponseDto) },
-        examples: {
-          businessExample: {
-            summary: 'A business with complete details',
-            value: {
-              id: 'business-123',
-              name: 'My Business',
-              phoneNumber: '+2347012345678',
-              description: 'A small retail business',
-              isVerified: false,
-              onboardingStep: OnboardingStep.BUSINESS_SETUP,
-              ownerId: 'user-123',
-              bankCode: null,
-              accountNumber: null,
-              accountName: null,
-              accountType: null,
-              settlementCurrency: 'USD',
-              categoryId: 'category-123',
-              isActive: true,
-              createdAt: '2023-01-01T00:00:00Z',
-              updatedAt: '2023-01-01T00:00:00Z',
-              category: {
-                id: 'category-123',
-                name: 'Retail',
-                isCustom: false,
-                isActive: true
-              }
-            }
-          }
-        }
+  @ApiResponse({
+    status: 200,
+    description: 'Business found and returned successfully',
+    type: SimplifiedBusinessResponseDto
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Business not found',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 404 },
+        message: { type: 'string', example: 'Business not found' },
+        error: { type: 'string', example: 'Not Found' }
       }
     }
   })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Business not found.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          businessNotFound: {
-            summary: 'Business not found error',
-            value: {
-              statusCode: 404,
-              message: 'Business with ID business-123 not found',
-              error: 'Not Found'
-            }
-          }
-        }
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Authentication required',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 401 },
+        message: { type: 'string', example: 'Unauthorized access' },
+        error: { type: 'string', example: 'Unauthorized' }
       }
     }
   })
   async getBusinessById(@Param('id') id: string, @Req() req) {
-    const ownerId = req.user?.id || 'default-owner-id';
+    const ownerId = req.user.id;
     return this.businessService.getBusinessById(id, ownerId);
   }
 
@@ -194,160 +167,27 @@ export class BusinessController {
    */
   @Patch(':id')
   @ApiOperation({
-    summary: 'Update business entity',
-    description: 'Updates a business entity with new or modified information.  All fields are initially null and updating them advances the onboarding process.'
+    summary: 'Update a business entity',
+    description: 'Updates business information like name, description, etc.'
   })
-  @ApiParam({
-    name: 'id',
-    description: 'Business ID',
-    type: String,
-    example: 'business-123'
-  })
-  @ApiBody({
-    type: CreateBusinessDto,
-    description: 'Business entity data to update',
-    examples: {
-      'Update with existing category': {
-        value: {
-          name: 'My Business',
-          phoneNumber: '+2347012345678',
-          description: 'A small retail business',
-          categoryId: 'category-123'
-        }
-      },
-      'Update with new category': {
-        value: {
-          name: 'My Restaurant',
-          phoneNumber: '+2347012345678',
-          description: 'A restaurant business',
-          categoryName: 'Food & Beverage'
-        }
-      },
-      'Partial update': {
-        value: {
-          name: 'Updated Business Name'
-        }
-      }
-    }
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Business entity updated successfully',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(BusinessResponseDto) },
-        example: {
-          id: 'business-123',
-          name: 'My Business',
-          phoneNumber: '+2347012345678',
-          description: 'A small retail business',
-          isVerified: false,
-          onboardingStep: OnboardingStep.BUSINESS_SETUP,
-          ownerId: 'user-123',
-          bankCode: null,
-          accountNumber: null,
-          accountName: null,
-          accountType: null,
-          settlementCurrency: 'USD',
-          categoryId: 'category-123',
-          isActive: true,
-          createdAt: '2023-01-01T00:00:00Z',
-          updatedAt: '2023-01-01T12:34:56Z'
-        }
-      }
-    }
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Invalid data provided or missing required fields',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          missingCategory: {
-            summary: 'Missing category error',
-            value: {
-              statusCode: 400,
-              message: 'Either categoryId or categoryName must be provided',
-              error: 'Bad Request'
-            }
-          }
-        }
-      }
-    }
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'Business or category not found',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          businessNotFound: {
-            summary: 'Business not found error',
-            value: {
-              statusCode: 404,
-              message: 'Business with ID business-123 not found',
-              error: 'Not Found'
-            }
-          },
-          categoryNotFound: {
-            summary: 'Category not found error',
-            value: {
-              statusCode: 404,
-              message: 'Category with ID category-123 not found',
-              error: 'Not Found'
-            }
-          }
-        }
-      }
-    }
-  })
-  async updateBusinessEntity(
+  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
+  @ApiBody({ type: CreateBusinessDto })
+  async updateBusiness(
     @Param('id') id: string,
-    @Body() updateData: CreateBusinessDto,
-    @Req() req: any
-  ): Promise<Business> {
-    const ownerId = req.user?.id || 'default-owner-id';
-    return this.businessService.updateBusinessEntity(id, updateData, ownerId);
+    @Body() updateData: Partial<Business>,
+    @Req() req
+  ) {
+    const ownerId = req.user.id;
+    return this.businessService.updateBusiness(id, updateData, ownerId);
   }
 
   @Put(':id/bank-account')
-  @ApiOperation({ 
-    summary: 'Link or update bank account', 
-    description: 'Links a bank account to a business or updates existing bank details. This endpoint handles both the initial setup and any subsequent updates. Bank account details are validated through the Paycrest API, and successful linking advances the onboarding process.'
+  @ApiOperation({
+    summary: 'Link bank account to business',
+    description: 'Add or update bank account information for the business'
   })
-  @ApiParam({ 
-    name: 'id', 
-    description: 'Business ID',
-    type: 'string',
-    example: 'business-123'
-  })
-  @ApiBody({
-    description: 'Bank account details',
-    type: LinkBankDto,
-    examples: {
-      example1: {
-        summary: 'Link Nigerian bank account',
-        value: {
-          bankCode: 'GTBINGLA',
-          accountNumber: '1234567890',
-          accountName: 'John Doe',
-          accountType: AccountType.POS,
-          settlementCurrency: 'NGN'
-        }
-      },
-      example2: {
-        summary: 'Link account with auto-name retrieval',
-        value: {
-          bankCode: 'FBNINGLA',
-          accountNumber: '0987654321',
-          accountType: AccountType.POS,
-          settlementCurrency: 'NGN'
-        }
-      }
-    }
-  })
+  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
+  @ApiBody({ type: LinkBankDto })
   @ApiResponse({ 
     status: 200, 
     description: 'Bank account successfully linked or updated.',
@@ -429,109 +269,56 @@ export class BusinessController {
   async updateBankAccount(
     @Param('id') id: string,
     @Body() linkBankDto: LinkBankDto,
-    @Req() req,
+    @Req() req
   ) {
-    const ownerId = req.user?.id || 'default-owner-id';
+    const ownerId = req.user.id;
     return this.businessService.updateBankAccount(id, linkBankDto, ownerId);
   }
 
   @Get()
-  @ApiOperation({ 
-    summary: 'Get all businesses', 
-    description: 'Returns a paginated list of all businesses owned by the authenticated user.'
+  @ApiOperation({
+    summary: 'Get all businesses for the authenticated user',
+    description: 'Returns a paginated list of all businesses owned by the authenticated user'
   })
-  @ApiQuery({ 
-    name: 'page', 
-    required: false, 
-    description: 'Page number (1-indexed)',
-    example: 1,
-    type: Number
-  })
-  @ApiQuery({ 
-    name: 'limit', 
-    required: false, 
-    description: 'Items per page',
-    example: 10,
-    type: Number
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Return all businesses.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(BusinessListResponseDto) },
-        examples: {
-          businessList: {
-            summary: 'List of businesses',
-            value: {
-              businesses: [
-                {
-                  id: 'business-123',
-                  name: 'My Business',
-                  phoneNumber: '+2347012345678',
-                  description: 'A small retail business',
-                  isVerified: false,
-                  onboardingStep: OnboardingStep.BUSINESS_SETUP,
-                  ownerId: 'user-123',
-                  bankCode: null,
-                  accountNumber: null,
-                  accountName: null,
-                  accountType: null,
-                  settlementCurrency: 'USD',
-                  categoryId: 'category-123',
-                  isActive: true,
-                  createdAt: '2023-01-01T00:00:00Z',
-                  updatedAt: '2023-01-01T00:00:00Z',
-                  category: {
-                    id: 'category-123',
-                    name: 'Retail'
-                  }
-                },
-                {
-                  id: 'business-456',
-                  name: 'My Restaurant',
-                  phoneNumber: '+2347098765432',
-                  description: 'A restaurant business',
-                  isVerified: true,
-                  onboardingStep: OnboardingStep.COMPLETED,
-                  ownerId: 'user-123',
-                  bankCode: 'GTBINGLA',
-                  accountNumber: '9876543210',
-                  accountName: 'John Doe Restaurant',
-                  accountType: AccountType.POS,
-                  settlementCurrency: 'NGN',
-                  categoryId: 'category-456',
-                  isActive: true,
-                  createdAt: '2023-01-02T00:00:00Z',
-                  updatedAt: '2023-01-02T00:00:00Z',
-                  category: {
-                    id: 'category-456',
-                    name: 'Food & Beverage'
-                  }
-                }
-              ],
-              total: 2,
-              page: 1,
-              limit: 10
-            }
+  @ApiQuery({ name: 'page', description: 'Page number', type: 'number', required: false })
+  @ApiQuery({ name: 'limit', description: 'Items per page', type: 'number', required: false })
+  @ApiResponse({
+    status: 200,
+    description: 'List of businesses retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 200 },
+        message: { type: 'string', example: 'Success' },
+        data: {
+          type: 'object',
+          properties: {
+            businesses: {
+              type: 'array',
+              items: { $ref: getSchemaPath(SimplifiedBusinessResponseDto) }
+            },
+            total: { type: 'number', example: 10 },
+            page: { type: 'number', example: 1 },
+            limit: { type: 'number', example: 10 }
           }
         }
       }
     }
   })
   async getAllBusinesses(
-    @Req() req, 
-    @Query('page') page?: number, 
+    @Req() req,
+    @Query('page') page?: number,
     @Query('limit') limit?: number
   ) {
-    const ownerId = req.user?.id || 'default-owner-id';
+    const ownerId = req.user.id;
     return this.businessService.getAllBusinesses(ownerId, page, limit);
   }
 
   @Get('categories/all')
-  @ApiOperation({ 
-    summary: 'Get all business categories', 
-    description: 'Returns a list of all available business categories.'
+  @Public()
+  @ApiOperation({
+    summary: 'Get all business categories',
+    description: 'Returns a list of all available business categories'
   })
   @ApiResponse({ 
     status: 200, 
@@ -575,16 +362,11 @@ export class BusinessController {
   }
 
   @Post(':id/deactivate')
-  @ApiOperation({ 
-    summary: 'Deactivate a business', 
-    description: 'Marks a business as inactive (soft delete). The business will no longer be visible in listings.'
+  @ApiOperation({
+    summary: 'Deactivate a business',
+    description: 'Sets a business as inactive but doesn\'t delete it from the database'
   })
-  @ApiParam({ 
-    name: 'id', 
-    description: 'Business ID',
-    type: 'string',
-    example: 'business-123'
-  })
+  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
   @ApiResponse({ 
     status: 200, 
     description: 'Business successfully deactivated.',
@@ -628,14 +410,16 @@ export class BusinessController {
   })
   @HttpCode(HttpStatus.OK)
   async deactivateBusiness(@Param('id') id: string, @Req() req) {
-    const ownerId = req.user?.id || 'default-owner-id';
-    return this.businessService.deactivateBusiness(id, ownerId);
+    const ownerId = req.user.id;
+    await this.businessService.deactivateBusiness(id, ownerId);
+    return { message: 'Business deactivated successfully' };
   }
 
   @Get('currencies')
-  @ApiOperation({ 
-    summary: 'Get supported currencies', 
-    description: 'Returns all currencies supported by the payment processor for business operations.'
+  @Public()
+  @ApiOperation({
+    summary: 'Get supported currencies',
+    description: 'Returns a list of all currencies supported by the payment processor'
   })
   @ApiResponse({ 
     status: 200, 
@@ -704,9 +488,10 @@ export class BusinessController {
   }
 
   @Get('institutions/:currencyCode')
-  @ApiOperation({ 
-    summary: 'Get supported institutions for a currency', 
-    description: 'Returns a list of supported financial institutions for the specified currency.'
+  @Public()
+  @ApiOperation({
+    summary: 'Get supported financial institutions',
+    description: 'Returns a list of supported banks and financial institutions for a currency'
   })
   @ApiParam({ 
     name: 'currencyCode', 
@@ -720,9 +505,7 @@ export class BusinessController {
     }
   })
   async getSupportedInstitutions(@Param('currencyCode') currencyCode: string) {
-    // The currencyCode param is kept for API compatibility but ignored in the service call
-    // as the service now returns all institutions
-    return this.businessService.getSupportedInstitutions();
+    return this.businessService.getSupportedInstitutions(currencyCode);
   }
 
   @Get('exchange-rate/:currencyCode')

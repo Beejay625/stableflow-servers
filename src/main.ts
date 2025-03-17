@@ -1,12 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
-import { TransformInterceptor } from './common/interceptors';
-import { HttpExceptionFilter } from './common/filters';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import envConfig from './config/env.config';
-import { ValidationPipe } from './common/pipes/validation.pipe';
+import { TransformInterceptor, HttpExceptionFilter, ValidationPipe } from './common';
 import { RedisService } from './modules/redis/redis.service';
 
 import * as dotenv from 'dotenv';
@@ -15,8 +12,11 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const logger = new Logger('NestApplication');
   try {
+    // Get config service
+    const configService = app.get(ConfigService);
+    
     // Log current environment with more visibility
-    const environment = envConfig.env.toUpperCase();
+    const environment = process.env.NODE_ENV?.toUpperCase() || 'DEVELOPMENT';
     
     // Create a prominent environment banner
     logger.log('----------------------------------------');
@@ -59,12 +59,17 @@ async function bootstrap() {
       .setTitle('StableFlow API')
       .setDescription('API documentation for the Event Management system')
       .setVersion('1.0')
-      .addBearerAuth()
+      .addBearerAuth(
+        {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT', // Optional, for better documentation
+        },
+        'access-token', // Name of the security scheme
+      )
       .build();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/v1/docs', app, document);
-
-    const configService = app.get(ConfigService);
 
     const port = parseInt(configService.get<string>('PORT') || '3000', 10);
 

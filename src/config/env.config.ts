@@ -2,32 +2,58 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Load environment-specific .env file
-const environment = process.env.NODE_ENV || 'development';
-const envPath = path.resolve(process.cwd(), `.env${environment !== 'production' ? '.' + environment : ''}`);
+/**
+ * Load the appropriate environment file based on NODE_ENV
+ * - development: .env.development
+ * - staging: .env.staging
+ * - production: .env
+ */
+function loadEnvFile() {
+  const environment = process.env.NODE_ENV || 'development';
+  let envFilePath;
+  
+  // Determine which env file to use based on environment
+  switch (environment) {
+    case 'development':
+      envFilePath = path.resolve(process.cwd(), '.env.development');
+      break;
+    case 'staging':
+      envFilePath = path.resolve(process.cwd(), '.env.staging');
+      break;
+    case 'production':
+    default:
+      envFilePath = path.resolve(process.cwd(), '.env');
+      break;
+  }
 
-// Check if the environment file exists
-const envFileExists = fs.existsSync(envPath);
+  // Check if the environment file exists
+  const envFileExists = fs.existsSync(envFilePath);
 
-// If environment-specific file exists, load it, otherwise fall back to .env
-if (envFileExists) {
-  console.log(`Loading environment variables from ${envPath}`);
-  dotenv.config({ path: envPath });
-} else {
-  console.log(`Environment file ${envPath} not found. Falling back to .env`);
-  dotenv.config();
+  if (envFileExists) {
+    console.log(`Loading environment variables from ${envFilePath}`);
+    dotenv.config({ path: envFilePath });
+  } else {
+    console.log(`Environment file ${envFilePath} not found. Falling back to .env`);
+    dotenv.config();
+  }
+  
+  console.log(`Application running in ${environment.toUpperCase()} mode`);
 }
 
-const config = {
+// Load environment variables
+loadEnvFile();
+
+// Export a function that returns the configuration object
+export default () => ({
   env: process.env.NODE_ENV || 'development',
   
   // Database configuration
   db: {
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT || '5432', 10),
-    name: process.env.DB_NAME,
+    name: process.env.DB_NAME || process.env.DB_DATABASE,
     password: process.env.DB_PASSWORD,
-    user: process.env.DB_USER,
+    user: process.env.DB_USER || process.env.DB_USERNAME,
     url: process.env.DATABASE_URL,
   },
   
@@ -49,33 +75,33 @@ const config = {
   
   // Email configuration (no-reply)
   email: {
-    host: process.env.NOREPLY_HOST,
-    username: process.env.NOREPLY_USERNAME,
-    password: process.env.NOREPLY_PASSWORD,
-    email: process.env.NOREPLY_EMAIL,
+    host: process.env.NOREPLY_HOST || process.env.MAIL_HOST,
+    username: process.env.NOREPLY_USERNAME || process.env.MAIL_USER,
+    password: process.env.NOREPLY_PASSWORD || process.env.MAIL_PASSWORD,
+    email: process.env.NOREPLY_EMAIL || process.env.MAIL_FROM,
   },
   
   // External API keys
   apiKeys: {
     alchemy: process.env.ALCHEMY_API_KEY,
-    paycrest: process.env.PAYCREST_API_KEY,
+    paycrest: process.env.PAYCREST_API_KEY || process.env.PAYCREST_API,
   },
   
   // Authentication and security
   security: {
     jwtSecret: process.env.JWT_SECRET,
     encryptionKey: process.env.ENCRYPTION_KEY,
+    jwtExpiration: process.env.JWT_EXPIRATION || '1d',
   },
-  //blockradar api 
-  blockradar:{
-    
+  
+  // Blockradar API configuration
+  blockradar: {
+    apiKey: process.env.BLOCKRADAR_API_KEY,
   },
   
   // Paycrest API configuration
   paycrest: {
-    apiKey: process.env.PAYCREST_API_KEY,
+    apiKey: process.env.PAYCREST_API_KEY || process.env.PAYCREST_API,
     baseUrl: process.env.PAYCREST_BASE_URL || 'https://api.paycrest.io',
   }
-};
-
-export default config;
+});

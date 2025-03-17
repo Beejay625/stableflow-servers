@@ -268,7 +268,7 @@ describe('BusinessService', () => {
   });
 
   describe('getBusinessById', () => {
-    it('should retrieve a business by its ID', async () => {
+    it('should retrieve a business by its ID with owner authentication', async () => {
       // Arrange
       const businessId = 'business-123';
       const ownerId = 'user-123';
@@ -286,6 +286,46 @@ describe('BusinessService', () => {
       // Assert
       expect(mockBusinessRepository.findOne).toHaveBeenCalledWith({ 
         where: { id: businessId, ownerId },
+        relations: ['category', 'owner'],
+        select: {
+          id: true,
+          name: true,
+          phoneNumber: true,
+          description: true,
+          isVerified: true,
+          onboardingStep: true,
+          bankCode: true,
+          accountNumber: true,
+          accountName: true,
+          accountType: true,
+          settlementCurrency: true,
+          categoryId: true,
+          ownerId: true,
+          isActive: true,
+          createdAt: true, 
+          updatedAt: true
+        }
+      });
+      expect(result).toEqual(business);
+    });
+
+    it('should retrieve a business by its ID for public access (no owner)', async () => {
+      // Arrange
+      const businessId = 'business-123';
+      const business = { 
+        id: businessId, 
+        name: 'Test Business',
+        ownerId: 'user-123' 
+      } as Business;
+
+      mockBusinessRepository.findOne.mockResolvedValue(business);
+
+      // Act
+      const result = await businessService.getBusinessById(businessId);
+
+      // Assert
+      expect(mockBusinessRepository.findOne).toHaveBeenCalledWith({ 
+        where: { id: businessId },
         relations: ['category', 'owner'],
         select: {
           id: true,

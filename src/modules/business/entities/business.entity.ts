@@ -10,26 +10,29 @@ import {
   Check
 } from 'typeorm';
 import { User } from '../../auth/entities/auth.entity';
-// Remove direct import to avoid circular dependency
-// import { Category } from './category.entity';
+import { Category } from './category.entity';
 
 /**
- * Enum for onboarding steps
+ * Constants for onboarding steps
  */
-export enum OnboardingStep {
-  NOT_STARTED = 'NOT_STARTED',
-  BUSINESS_SETUP = 'BUSINESS_SETUP',
-  ACCOUNT_SETUP = 'ACCOUNT_SETUP',
-  COMPLETED = 'COMPLETED'
-}
+export const OnboardingStep = {
+  NOT_STARTED: 'NOT_STARTED',
+  BUSINESS_SETUP: 'BUSINESS_SETUP',
+  ACCOUNT_SETUP: 'ACCOUNT_SETUP',
+  COMPLETED: 'COMPLETED'
+} as const;
+
+export type OnboardingStep = typeof OnboardingStep[keyof typeof OnboardingStep];
 
 /**
- * Enum for account types
+ * Constants for account types
  */
-export enum AccountType {
-  POS = 'pos',
-  CASH = 'cash'
-}
+export const AccountType = {
+  POS: 'pos',
+  CASH: 'cash'
+} as const;
+
+export type AccountType = typeof AccountType[keyof typeof AccountType];
 
 /**
  * Entity for storing business information including bank details
@@ -57,7 +60,7 @@ export class Business {
 
   @Column({
     type: 'enum',
-    enum: OnboardingStep,
+    enum: Object.values(OnboardingStep),
     default: OnboardingStep.NOT_STARTED
   })
   onboardingStep: OnboardingStep;
@@ -76,17 +79,20 @@ export class Business {
   @Column({ 
     nullable: true, 
     type: 'enum',
-    enum: AccountType
+    enum: Object.values(AccountType)
   })
   accountType: AccountType;
 
   @Column({ nullable: true, default: 'USD' })
   settlementCurrency: string;
 
-  // Category relationship
-  @ManyToOne('Category', (category: any) => category.businesses)
-  @JoinColumn({ name: 'category_id' })
-  category: any;
+  // Category relationship using proper TypeORM way to handle circular dependencies
+  @ManyToOne(type => Category, category => category.businesses, { 
+    nullable: true,
+    eager: true 
+  })
+  @JoinColumn({ name: 'categoryId' })
+  category: Category;
 
   @Column({ nullable: true })
   categoryId: string;

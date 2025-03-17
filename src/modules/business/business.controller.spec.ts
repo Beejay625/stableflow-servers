@@ -4,6 +4,7 @@ import { BusinessController } from './business.controller';
 import { BusinessService } from './business.service';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
+import { SimplifiedBusinessResponseDto } from './dto/business-response.dto';
 import { Business, OnboardingStep, AccountType } from './entities/business.entity';
 import { Category } from './entities/category.entity';
 
@@ -68,12 +69,16 @@ describe('BusinessController', () => {
     isVerified: false,
     onboardingStep: OnboardingStep.BUSINESS_SETUP,
     ownerId: mockOwnerId,
-    bankCode: null,
-    accountNumber: null,
-    accountName: null,
-    accountType: null,
+  };
+
+  // Mock simplified business response
+  const mockSimplifiedBusiness: SimplifiedBusinessResponseDto = {
+    id: mockBusinessId,
+    name: 'Test Business',
+    phoneNumber: '+1234567890',
+    isVerified: false,
+    onboardingStep: OnboardingStep.BUSINESS_SETUP,
     settlementCurrency: 'USD',
-    categoryId: mockCategoryId,
     isActive: true,
     createdAt: new Date('2023-01-01T00:00:00Z'),
     updatedAt: new Date('2023-01-01T00:00:00Z'),
@@ -109,12 +114,12 @@ describe('BusinessController', () => {
     onboardingStep: OnboardingStep.COMPLETED,
   };
 
-  // Mock response for getAllBusinesses
+  // Mock paginated response
   const mockBusinessesResponse = {
-    businesses: [mockBusiness],
+    businesses: [mockSimplifiedBusiness],
     total: 1,
     page: 1,
-    limit: 10,
+    limit: 10
   };
 
   // Mock response for getAllCategories
@@ -144,18 +149,21 @@ describe('BusinessController', () => {
 
   // Mock service
   const mockBusinessService = {
-    updateBusinessEntity: jest.fn().mockImplementation((id, dto, ownerId) => 
-      Promise.resolve({...mockBusiness, ...dto, id})),
-    getBusinessById: jest.fn().mockImplementation((id, ownerId) => Promise.resolve(mockBusiness)),
-    updateBusiness: jest.fn().mockImplementation((id, dto, ownerId) => Promise.resolve(updatedBusiness)),
-    updateBankAccount: jest.fn().mockImplementation((id, dto, ownerId) => Promise.resolve(mockBusinessWithBank)),
-    getAllBusinesses: jest.fn().mockImplementation((ownerId, page, limit) => Promise.resolve(mockBusinessesResponse)),
-    getAllCategories: jest.fn().mockImplementation(() => Promise.resolve(mockCategoriesResponse)),
-    deactivateBusiness: jest.fn().mockImplementation((id, ownerId) => Promise.resolve({ success: true })),
-    getSupportedCurrencies: jest.fn().mockImplementation(() => Promise.resolve(mockCurrencies)),
-    getSupportedInstitutions: jest.fn().mockImplementation((currencyCode) => Promise.resolve(mockInstitutions)),
-    getExchangeRate: jest.fn().mockImplementation((tokenCode, amount, currencyCode, providerId) => 
-      Promise.resolve(mockExchangeRate)),
+    getBusinessById: jest.fn(),
+    updateBusiness: jest.fn().mockImplementation((id, dto, ownerId) =>
+      Promise.resolve({
+        ...mockInitialBusiness,
+        ...dto,
+        onboardingStep: OnboardingStep.BUSINESS_SETUP
+      })
+    ),
+    updateBankAccount: jest.fn(),
+    getAllBusinesses: jest.fn(),
+    getAllCategories: jest.fn(),
+    deactivateBusiness: jest.fn(),
+    getSupportedCurrencies: jest.fn(),
+    getSupportedInstitutions: jest.fn(),
+    getExchangeRate: jest.fn()
   };
 
   beforeEach(async () => {
@@ -205,38 +213,33 @@ describe('BusinessController', () => {
    * }
    */
   describe('getBusinessById', () => {
-    it('should return a complete business by ID with all fields', async () => {
+    it('should return a business by ID', async () => {
       const req = { user: { id: mockOwnerId } };
       
-      // Ensure mock business has all fields
-      const completeBusinessMock = {
-        ...mockBusiness,
-        // Add any additional fields you want to test
-        category: mockCategory
-      };
-      
-      mockBusinessService.getBusinessById.mockResolvedValueOnce(completeBusinessMock);
+      mockBusinessService.getBusinessById.mockResolvedValueOnce(mockSimplifiedBusiness);
       const result = await controller.getBusinessById(mockBusinessId, req);
       
-      // Check all fields are present
-      expect(result).toEqual(completeBusinessMock);
+      // Check that only the essential fields are present in the simplified response
+      expect(result).toEqual(mockSimplifiedBusiness);
       expect(result.id).toBeDefined();
       expect(result.name).toBeDefined();
       expect(result.phoneNumber).toBeDefined();
-      expect(result.description).toBeDefined();
       expect(result.isVerified).toBeDefined();
       expect(result.onboardingStep).toBeDefined();
-      expect(result.ownerId).toBeDefined();
-      expect(result.bankCode).toBeDefined(); // Might be null but should be present
-      expect(result.accountNumber).toBeDefined(); // Might be null but should be present
-      expect(result.accountName).toBeDefined(); // Might be null but should be present
-      expect(result.accountType).toBeDefined(); // Might be null but should be present
       expect(result.settlementCurrency).toBeDefined();
-      expect(result.categoryId).toBeDefined();
       expect(result.isActive).toBeDefined();
       expect(result.createdAt).toBeDefined();
       expect(result.updatedAt).toBeDefined();
-      expect(result.category).toBeDefined(); // Should include related data
+      
+      // These fields should not be present in the simplified response
+      // expect(result.description).toBeDefined();
+      // expect(result.ownerId).toBeDefined();
+      // expect(result.bankCode).toBeDefined();
+      // expect(result.accountNumber).toBeDefined();
+      // expect(result.accountName).toBeDefined();
+      // expect(result.accountType).toBeDefined();
+      // expect(result.categoryId).toBeDefined();
+      // expect(result.category).toBeDefined();
 
       expect(businessService.getBusinessById).toHaveBeenCalledWith(mockBusinessId, mockOwnerId);
     });
@@ -271,7 +274,7 @@ describe('BusinessController', () => {
    *   ...other fields remain the same
    * }
    */
-  describe('updateBusinessEntity', () => {
+  describe('updateBusiness', () => {
     it('should update a business entity and return it', async () => {
       const req = { user: { id: mockOwnerId } };
       const updateDto: CreateBusinessDto = { 
@@ -281,13 +284,13 @@ describe('BusinessController', () => {
         categoryId: mockCategoryId
       };
       
-      mockBusinessService.updateBusinessEntity.mockResolvedValueOnce({
+      mockBusinessService.updateBusiness.mockResolvedValueOnce({
         ...mockInitialBusiness,
         ...updateDto,
         onboardingStep: OnboardingStep.BUSINESS_SETUP
       });
       
-      const result = await controller.updateBusinessEntity(mockBusinessId, updateDto, req);
+      const result = await controller.updateBusiness(mockBusinessId, updateDto, req);
       
       expect(result.name).toEqual(updateDto.name);
       expect(result.phoneNumber).toEqual(updateDto.phoneNumber);
@@ -295,81 +298,62 @@ describe('BusinessController', () => {
       expect(result.categoryId).toEqual(updateDto.categoryId);
       expect(result.onboardingStep).toEqual(OnboardingStep.BUSINESS_SETUP);
       
-      expect(businessService.updateBusinessEntity).toHaveBeenCalledWith(mockBusinessId, updateDto, mockOwnerId);
+      expect(businessService.updateBusiness).toHaveBeenCalledWith(mockBusinessId, updateDto, mockOwnerId);
     });
 
-    it('should handle partial updates with minimal fields', async () => {
+    it('should update a business with minimal data', async () => {
       const req = { user: { id: mockOwnerId } };
       const minimalDto: CreateBusinessDto = { 
-        name: 'Just Update Name',
-        phoneNumber: '+1234567890',
-        description: 'Minimal update',
-        categoryId: mockCategoryId
+        name: 'Updated Business Name'
       };
       
-      mockBusinessService.updateBusinessEntity.mockResolvedValueOnce({
+      mockBusinessService.updateBusiness.mockResolvedValueOnce({
         ...mockInitialBusiness,
-        ...minimalDto,
-        onboardingStep: OnboardingStep.BUSINESS_SETUP
+        ...minimalDto
       });
       
-      const result = await controller.updateBusinessEntity(mockBusinessId, minimalDto, req);
+      const result = await controller.updateBusiness(mockBusinessId, minimalDto, req);
       
       expect(result.name).toEqual(minimalDto.name);
-      expect(result.categoryId).toEqual(minimalDto.categoryId);
-      expect(businessService.updateBusinessEntity).toHaveBeenCalledWith(mockBusinessId, minimalDto, mockOwnerId);
+      expect(businessService.updateBusiness).toHaveBeenCalledWith(mockBusinessId, minimalDto, mockOwnerId);
     });
 
-    it('should use default owner ID if user is not in request', async () => {
-      const req = {};
-      const updateDto: CreateBusinessDto = { 
-        name: 'Updated Business',
-        phoneNumber: '+1234567890',
-        description: 'Using default owner',
-        categoryId: mockCategoryId
-      };
+    it('should extract owner ID from request', async () => {
+      const req = { user: { id: mockOwnerId } };
+      const updateDto: CreateBusinessDto = { name: 'Updated Business' };
       
-      await controller.updateBusinessEntity(mockBusinessId, updateDto, req);
+      await controller.updateBusiness(mockBusinessId, updateDto, req);
       
-      expect(businessService.updateBusinessEntity).toHaveBeenCalledWith(
+      expect(businessService.updateBusiness).toHaveBeenCalledWith(
         mockBusinessId,
-        updateDto, 
-        'default-owner-id'
+        updateDto,
+        mockOwnerId
       );
     });
 
-    it('should handle not found error', async () => {
+    it('should throw NotFoundException when business not found', async () => {
       const req = { user: { id: mockOwnerId } };
-      const updateDto: CreateBusinessDto = { 
-        name: 'Updated Business',
-        phoneNumber: '+1234567890',
-        description: 'Not found test',
-        categoryId: mockCategoryId 
-      };
+      const updateDto: CreateBusinessDto = { name: 'Updated Business' };
       
-      mockBusinessService.updateBusinessEntity.mockRejectedValueOnce(
+      mockBusinessService.updateBusiness.mockRejectedValueOnce(
         new NotFoundException(`Business with ID non-existent-id not found`)
       );
       
       await expect(
-        controller.updateBusinessEntity('non-existent-id', updateDto, req)
+        controller.updateBusiness('non-existent-id', updateDto, req)
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('should handle validation errors', async () => {
+    it('should throw BadRequestException for invalid data', async () => {
       const req = { user: { id: mockOwnerId } };
-      const invalidDto = { 
-        name: 'Missing category fields',
-        phoneNumber: '+1234567890',
-        description: 'Invalid DTO test',
-      };
+      const invalidDto = { invalidField: 'value' };
       
-      mockBusinessService.updateBusinessEntity.mockRejectedValueOnce(
-        new BadRequestException('Either categoryId or categoryName must be provided')
+      mockBusinessService.updateBusiness.mockRejectedValueOnce(
+        new BadRequestException('Invalid data')
       );
       
       await expect(
-        controller.updateBusinessEntity(mockBusinessId, invalidDto as CreateBusinessDto, req)
+        controller.updateBusiness(mockBusinessId, invalidDto as CreateBusinessDto, req)
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -469,13 +453,20 @@ describe('BusinessController', () => {
     });
 
     it('should use default owner ID if not provided in request', async () => {
-      const req = {};
+      const req = { user: { id: undefined } };
+      
+      // Mock the appropriate dependencies
+      mockBusinessService.updateBankAccount.mockResolvedValueOnce({
+        ...mockBusiness,
+        ...linkBankDto
+      });
+      
       await controller.updateBankAccount(mockBusinessId, linkBankDto, req);
       
       expect(businessService.updateBankAccount).toHaveBeenCalledWith(
         mockBusinessId,
         linkBankDto, 
-        'default-owner-id'
+        undefined // Now expecting undefined since we don't use default-owner-id anymore
       );
     });
 

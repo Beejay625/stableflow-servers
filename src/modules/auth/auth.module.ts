@@ -6,7 +6,7 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { User } from './entities/auth.entity';
 import { RedisModule } from '../redis/redis.module';
-import { MailService } from '../../common/utils/email';
+import { MailService } from '../../common/utils';
 import { Business } from '../business/entities/business.entity';
 
 @Module({

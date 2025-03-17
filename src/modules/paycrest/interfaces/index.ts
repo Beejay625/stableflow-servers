@@ -24,6 +24,7 @@ export interface Institution {
   name: string;
   code: string;
   type: 'bank' | 'telco' | 'wallet';
+  supportedCurrencies?: string[];
 }
 
 /**

@@ -6,8 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany
 } from 'typeorm';
-// Remove this import to avoid circular dependency
-// import { Business } from './business.entity';
+import { Business } from './business.entity';
 
 /**
  * Entity for storing business categories
@@ -29,8 +28,8 @@ export class Category {
   @Column({ default: true })
   isActive: boolean;
 
-  @OneToMany('Business', (business: any) => business.category)
-  businesses: any[];
+  @OneToMany(type => Business, business => business.category)
+  businesses: Business[];
 
   @CreateDateColumn()
   createdAt: Date;
