@@ -30,16 +30,6 @@ export class UpdateBusinessDto {
   phoneNumber?: string;
 
   @IsOptional()
-  @IsString()
-  @Length(0, 500)
-  @ApiProperty({
-    description: 'Business description',
-    example: 'A small retail business selling handmade crafts',
-    required: false
-  })
-  description?: string;
-
-  @IsOptional()
   @IsUUID('all', {
     message: 'categoryId must be a valid UUID format (e.g., 123e4567-e89b-12d3-a456-426614174000)'
   })
@@ -59,22 +49,4 @@ export class UpdateBusinessDto {
     required: false
   })
   categoryName?: string;
-
-  @IsOptional()
-  @IsString()
-  @ApiProperty({
-    description: 'Settlement currency for the business',
-    example: 'USD',
-    required: false
-  })
-  settlementCurrency?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  @ApiProperty({
-    description: 'Whether the business is active',
-    example: true,
-    required: false
-  })
-  isActive?: boolean;
 } 

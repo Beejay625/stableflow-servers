@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException, Logger, InternalServerErrorException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,11 +17,11 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(Business)
-    private readonly businessRepository: Repository<Business>,
+    private readonly redisService: RedisService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
-    private readonly redisService: RedisService,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly mailService: MailService
   ) {}
 
@@ -225,5 +225,61 @@ export class AuthService {
     this.logger.log(`Response object: ${JSON.stringify(response)}`);
     
     return response;
+  }
+
+  /**
+   * Delete a user and all associated data (for testing purposes only)
+   * @param userId - ID of the user to delete
+   * @returns Promise with details of the deletion
+   */
+  async deleteUserAndData(userId: string): Promise<{ 
+    success: boolean; 
+    deletedBusinessesCount: number; 
+    message: string 
+  }> {
+    this.logger.log(`[TEST ENDPOINT] Deleting user ${userId} and all associated data`);
+    
+    // Find the user
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    
+    if (!user) {
+      this.logger.error(`User with ID ${userId} not found`);
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+    
+    // Find all businesses owned by this user
+    const businesses = await this.businessRepository.find({ where: { ownerId: userId } });
+    this.logger.log(`Found ${businesses.length} businesses owned by user ${userId}`);
+    
+    // Delete each business
+    for (const business of businesses) {
+      this.logger.log(`Deleting business ${business.id}`);
+      
+      // Log if business has wallet data
+      if (business.walletAddress || business.walletId) {
+        this.logger.log(`Business ${business.id} has wallet data that will be deleted: 
+          Address: ${business.walletAddress}, 
+          Wallet ID: ${business.walletId}`);
+      }
+      
+      // Delete the business
+      await this.businessRepository.delete({ id: business.id });
+    }
+    
+    // Log if user has wallet data
+    if (user.walletAddress || user.encryptedMnemonic) {
+      this.logger.log(`User ${userId} has wallet data that will be deleted: 
+        Address: ${user.walletAddress}, 
+        Has Encrypted Mnemonic: ${!!user.encryptedMnemonic}`);
+    }
+    
+    // Delete the user
+    await this.userRepository.delete({ id: userId });
+    
+    return {
+      success: true,
+      deletedBusinessesCount: businesses.length,
+      message: `User ${userId} and ${businesses.length} associated businesses have been deleted`
+    };
   }
 } 

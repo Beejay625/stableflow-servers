@@ -1,46 +1,117 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { OnboardingStep } from '../entities/business.entity';
+import { OnboardingStep, AccountType } from '../entities/business.entity';
+import { Category } from '../entities/category.entity';
+
+export class BankDetailsDto {
+  @ApiProperty({ description: 'Bank code of the business account' })
+  bankCode: string;
+
+  @ApiProperty({ description: 'Bank name of the business account' })
+  bankName: string;
+
+  @ApiProperty({ description: 'Account number of the business' })
+  accountNumber: string;
+
+  @ApiProperty({ description: 'Account name of the business' })
+  accountName: string;
+
+  @ApiProperty({ description: 'Type of the business account', enum: AccountType })
+  accountType: AccountType;
+  
+  @ApiProperty({ description: 'When the bank details were created' })
+  createdAt: Date;
+  
+  @ApiProperty({ description: 'When the bank details were last updated' })
+  updatedAt: Date;
+}
+
+/**
+ * Wallet Details DTO
+ * Contains cryptocurrency wallet information
+ */
+export class WalletDetailsDto {
+  @ApiProperty({ description: 'Wallet ID from blockchain provider', example: '12345' })
+  walletId: string;
+
+  @ApiProperty({ description: 'Wallet address', example: '0xf5f2817A086e747a7c45429993338070Af8f3A81' })
+  address: string;
+
+  @ApiProperty({ description: 'Blockchain network', example: 'testnet' })
+  network: string;
+
+  @ApiProperty({ description: 'Whether wallet is compatible with EVM (Ethereum Virtual Machine)', example: true })
+  isEvmCompatible: boolean;
+
+  @ApiProperty({ description: 'Additional metadata for the wallet', example: { user_id: '123' } })
+  metadata: Record<string, any>;
+}
 
 /**
  * Simplified Business Response DTO
  * Contains only essential information needed for the client
  */
 export class SimplifiedBusinessResponseDto {
-  @ApiProperty({ example: 'f47ac10b-58cc-4372-a567-0e02b2c3d479' })
-  id: string;
+  @ApiProperty({ description: 'Unique identifier of the business' })
+  Business_id: string;
 
-  @ApiProperty({ example: 'Business Name' })
+  @ApiProperty({ description: 'Name of the business' })
   name: string;
 
-  @ApiProperty({ example: '1234567890' })
+  @ApiProperty({ description: 'Phone number of the business' })
   phoneNumber: string;
 
-  @ApiProperty({ example: false })
-  isVerified: boolean;
+  @ApiProperty({ description: 'Category of the business' })
+  category: Category;
 
-  @ApiProperty({ enum: OnboardingStep, example: OnboardingStep.NOT_STARTED })
+  @ApiProperty({ description: 'Current onboarding step of the business', enum: OnboardingStep })
   onboardingStep: OnboardingStep;
 
-  @ApiProperty({ example: 'USD' })
-  settlementCurrency: string;
+  @ApiProperty({ description: 'Status of the business', enum: ['ACTIVE', 'INACTIVE'] })
+  business_status: string;
 
-  @ApiProperty({ example: true })
-  isActive: boolean;
+  @ApiProperty({ description: 'Bank details of the business' })
+  bankDetails: BankDetailsDto;
 
-  @ApiProperty({ example: '2023-01-01T00:00:00Z' })
+  @ApiProperty({ description: 'Wallet details of the business', nullable: true })
+  walletDetails: WalletDetailsDto;
+
+  @ApiProperty({ description: 'User ID who owns the business' })
+  user_Id: string;
+
+  @ApiProperty({ description: 'When the business was created' })
   createdAt: Date;
   
-  @ApiProperty({ example: '2023-01-01T00:00:00Z' })
+  @ApiProperty({ description: 'When the business was last updated' })
   updatedAt: Date;
+}
+
+/**
+ * Standard API Response format
+ */
+export class BusinessResponseDto {
+  @ApiProperty({ description: 'HTTP Status code', example: 200 })
+  statusCode: number;
+
+  @ApiProperty({ description: 'Response message', example: 'Success' })
+  message: string;
+
+  @ApiProperty({ description: 'Business data' })
+  data: SimplifiedBusinessResponseDto;
+  
+  @ApiProperty({ description: 'Wallet details if a wallet was just generated', required: false })
+  walletDetails?: WalletDetailsDto;
 }
 
 /**
  * Category information in simplified form
  */
 export class SimplifiedCategoryDto {
-  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
+  @ApiProperty({ description: 'Unique identifier of the category' })
   id: string;
 
-  @ApiProperty({ example: 'Retail' })
+  @ApiProperty({ description: 'Name of the category' })
   name: string;
+
+  @ApiProperty({ description: 'Whether this is a custom category' })
+  isCustom: boolean;
 } 

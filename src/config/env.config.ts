@@ -97,6 +97,8 @@ export default () => ({
   // Blockradar API configuration
   blockradar: {
     apiKey: process.env.BLOCKRADAR_API_KEY,
+    walletId: process.env.WALLET_ID,
+    network: process.env.NETWORK || 'mainnet',
   },
   
   // Paycrest API configuration

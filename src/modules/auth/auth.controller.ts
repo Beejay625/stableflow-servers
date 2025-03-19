@@ -1,5 +1,5 @@
-import { Controller, Post, Body, Logger, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { Controller, Post, Body, Logger, HttpCode, HttpStatus, Delete, Param } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody, ApiParam } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { 
   RequestOtpDto, 
@@ -64,5 +64,21 @@ export class AuthController {
     this.logger.log(`Final response object: ${JSON.stringify(response)}`);
     
     return response;
+  }
+
+  @Public()
+  @Delete('test/delete-user/:userId')
+  @ApiOperation({ summary: 'Delete a user and all associated data (TEST ONLY)' })
+  @ApiParam({ name: 'userId', description: 'ID of the user to delete' })
+  @ApiResponse({ status: 200, description: 'User and associated data deleted successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 500, description: 'Internal Server Error' })
+  async deleteUserAndData(@Param('userId') userId: string): Promise<{ 
+    success: boolean; 
+    deletedBusinessesCount: number; 
+    message: string 
+  }> {
+    this.logger.log(`[TEST ENDPOINT] Request to delete user ${userId} and all associated data`);
+    return this.authService.deleteUserAndData(userId);
   }
 }

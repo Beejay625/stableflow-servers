@@ -7,18 +7,30 @@ import axios, { AxiosError } from 'axios';
 /**
  * Utility function to handle Axios errors and convert them to our custom HttpErrorException
  * @param error - The error caught from Axios
+ * @param customMessage - Optional custom message to prefix the error
  */
-export const handleAxiosError = (error: any): never => {
+export const handleAxiosError = (error: any, customMessage?: string): never => {
   if (axios.isAxiosError(error)) {
     const axiosError = error as AxiosError;
     const status = axiosError.response?.status || HttpStatus.INTERNAL_SERVER_ERROR;
     
     // Fix type safety by using type assertion
     const responseData = axiosError.response?.data as any;
-    const message = responseData?.message || axiosError.message || 'An error occurred with the API request';
+    let message = responseData?.message || axiosError.message || 'An error occurred with the API request';
+    
+    // Add custom message prefix if provided
+    if (customMessage) {
+      message = `${customMessage}: ${message}`;
+    }
+    
     const code = responseData?.code || axiosError.code || 'UNKNOWN_ERROR';
     
     throw new HttpErrorException(message, status, code);
+  }
+  
+  // If it's not an Axios error, add custom message if provided
+  if (customMessage) {
+    throw new HttpErrorException(`${customMessage}: ${error.message || 'Unknown error'}`, HttpStatus.INTERNAL_SERVER_ERROR);
   }
   
   throw error;

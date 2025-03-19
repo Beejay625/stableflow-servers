@@ -15,7 +15,6 @@ export interface BusinessDetail {
   accountNumber?: string;
   accountName?: string;
   accountType?: AccountType;
-  settlementCurrency?: string;
   categoryId?: string;
   category?: CategoryDetail;
   ownerId: string;
@@ -77,3 +76,55 @@ export interface ExchangeRateResponse {
 // Re-export Paycrest types for backward compatibility
 export type PaycrestCurrency = Currency;
 export type PaycrestInstitution = Institution;
+
+/**
+ * Nigerian bank details from NubaAPI
+ */
+export interface NigerianBank {
+  name: string;
+  code: string;
+}
+
+/**
+ * Nigerian bank list response
+ */
+export interface NigerianBankResponse {
+  statusCode: number;
+  message: string;
+  data: NigerianBank[];
+}
+
+/**
+ * Response structure for bank account validation
+ */
+export interface BankValidationResponse {
+  /**
+   * The bank information
+   */
+  bank: {
+    /**
+     * Bank name
+     */
+    name: string;
+    
+    /**
+     * Bank code
+     */
+    code: string;
+  };
+  
+  /**
+   * The verified account details
+   */
+  account: {
+    /**
+     * Account number
+     */
+    number: string;
+    
+    /**
+     * Account holder's name
+     */
+    name: string;
+  };
+}

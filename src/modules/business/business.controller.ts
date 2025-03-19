@@ -11,7 +11,10 @@ import {
   Req,
   UseGuards,
   Patch,
-  UnauthorizedException
+  UnauthorizedException,
+  Logger,
+  BadRequestException,
+  Delete
 } from '@nestjs/common';
 import { 
   ApiTags, 
@@ -35,6 +38,7 @@ import { BusinessDetail, BusinessListResponse, CategoryListResponse, ExchangeRat
 import { OnboardingStep, AccountType } from './entities/business.entity';
 import { JwtAuthGuard } from '../../common/guards';
 import { Public } from '../../common/decorators';
+import { VerifyBankDto } from './dto/verify-bank.dto';
 
 // Create classes for API documentation
 class BusinessResponseDto {
@@ -166,8 +170,64 @@ class ErrorResponseDto {
 @ApiExtraModels(BusinessResponseDto, CategoryDto, BusinessListResponseDto, CategoryListResponseDto, ErrorResponseDto, CurrencyDto, InstitutionDto, ExchangeRateResponseDto)
 @Controller('businesses')
 export class BusinessController {
+  private readonly logger = new Logger(BusinessController.name);
+  
   constructor(private readonly businessService: BusinessService) {}
 
+  /**
+   * Get all Nigerian banks
+   */
+  @Get('banks')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ summary: 'Get all Nigerian banks' })
+  @ApiResponse({
+    status: 200,
+    description: 'Returns a list of all Nigerian banks',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 200 },
+        message: { type: 'string', example: 'Nigerian banks fetched successfully' },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', example: 'Access Bank' },
+              code: { type: 'string', example: '044' }
+            }
+          }
+        }
+      }
+    }
+  })
+  async getNigerianBanks(): Promise<any> {
+    try {
+      this.logger.log('Getting Nigerian banks from service');
+      const banks = await this.businessService.getNigerianBanks();
+      
+      // Add debug logging
+      this.logger.debug(`Successfully retrieved ${banks.length} banks`);
+      
+      return {
+        statusCode: 200,
+        message: 'Nigerian banks fetched successfully',
+        data: banks
+      };
+    } catch (error) {
+      this.logger.error(`Failed to fetch Nigerian banks: ${error.message}`, error.stack);
+      
+      // Let NestJS exception filters handle the exception
+      throw error;
+    }
+  }
+
+  /**
+   * Retrieves a business entity by ID
+   * @param id Business ID
+   * @param req Request object containing user information
+   * @returns Business entity
+   */
   @Get(':id')
   @ApiOperation({
     summary: 'Get a business by ID',
@@ -216,17 +276,44 @@ export class BusinessController {
   /**
    * Updates a business entity by ID (partial update)
    * @param id Business ID
-   * @param updateData Updated business data (partial)
    * @param req Request object containing user information
    * @returns Updated business entity
    */
   @Patch(':id')
   @ApiOperation({
     summary: 'Update a business entity',
-    description: 'Updates business information like name, description, etc.'
+    description: 'Updates business information like name, etc. using query parameters'
   })
-  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
-  @ApiBody({ type: UpdateBusinessDto })
+  @ApiParam({ 
+    name: 'id', 
+    description: 'Business ID (required)', 
+    type: 'string',
+    required: true 
+  })
+  @ApiQuery({ 
+    name: 'name', 
+    description: 'Business name', 
+    type: 'string',
+    required: false 
+  })
+  @ApiQuery({ 
+    name: 'phoneNumber', 
+    description: 'Business phone number in international format (e.g., +2347012345678)', 
+    type: 'string',
+    required: false 
+  })
+  @ApiQuery({ 
+    name: 'categoryId', 
+    description: 'ID of an existing category (use either categoryId to select an existing category OR categoryName to create a custom category)', 
+    type: 'string',
+    required: false 
+  })
+  @ApiQuery({ 
+    name: 'categoryName', 
+    description: 'Name for a new custom category (use either categoryId to select an existing category OR categoryName to create a custom category)', 
+    type: 'string',
+    required: false 
+  })
   @ApiResponse({
     status: 200,
     description: 'Business updated successfully',
@@ -264,88 +351,89 @@ export class BusinessController {
     }
   })
   async updateBusiness(
+    @Req() req,
     @Param('id') id: string,
-    @Body() updateData: UpdateBusinessDto,
-    @Req() req
+    @Query('name') name?: string,
+    @Query('phoneNumber') phoneNumber?: string,
+    @Query('categoryId') categoryId?: string,
+    @Query('categoryName') categoryName?: string,
   ) {
     const ownerId = req.user.id;
-    return this.businessService.updateBusiness(id, updateData, ownerId);
+    this.logger.debug(`Updating business ${id} for user ${ownerId}`);
+    
+    // Construct the update object from query parameters
+    const updateData = new UpdateBusinessDto();
+    if (name !== undefined) updateData.name = name;
+    if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (categoryName !== undefined) updateData.categoryName = categoryName;
+    
+    return this.businessService.updateBusiness(id, ownerId, updateData);
   }
 
   @Put(':id/bank-account')
   @ApiOperation({
-    summary: 'Link bank account to business',
-    description: 'Add or update bank account information for the business'
+    summary: 'Update or link bank account',
+    description: 'Updates or links a bank account to a business (requires authentication and business ownership)'
   })
-  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
-  @ApiBody({ type: LinkBankDto })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Bank account successfully linked or updated.',
+  @ApiParam({ 
+    name: 'id', 
+    description: 'Business ID (UUID)', 
+    example: 'business-123'
+  })
+  @ApiQuery({ 
+    name: 'bankCode', 
+    description: 'Bank code', 
+    required: false,
+    example: '057'
+  })
+  @ApiQuery({ 
+    name: 'bankName', 
+    description: 'Bank name (used if bankCode is not provided)', 
+    required: false,
+    example: 'Zenith Bank'
+  })
+  @ApiQuery({ 
+    name: 'accountNumber', 
+    description: 'Account number', 
+    required: true,
+    example: '1234567890'
+  })
+  @ApiQuery({ 
+    name: 'accountType', 
+    description: 'Account type', 
+    required: true,
+    enum: Object.values(AccountType),
+    example: 'pos'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bank account linked successfully',
     content: {
       'application/json': {
-        schema: { $ref: getSchemaPath(BusinessResponseDto) },
+        schema: {
+          $ref: getSchemaPath(BusinessResponseDto)
+        },
         examples: {
-          linkedAccount: {
-            summary: 'Business with linked bank account',
+          accountLinked: {
+            summary: 'Bank account linked successfully',
             value: {
-              id: 'business-123',
-              name: 'My Business',
-              phoneNumber: '+2347012345678',
-              description: 'A small retail business',
-              isVerified: false,
-              onboardingStep: OnboardingStep.ACCOUNT_SETUP,
-              ownerId: 'user-123',
-              bankCode: 'GTBINGLA',
-              accountNumber: '1234567890',
-              accountName: 'John Doe',
-              accountType: AccountType.POS,
-              settlementCurrency: 'NGN',
-              categoryId: '123e4567-e89b-12d3-a456-426614174000',
-              isActive: true,
-              createdAt: '2023-01-01T00:00:00Z',
-              updatedAt: '2023-01-01T12:34:56Z'
+              statusCode: 200,
+              message: 'Success',
+              data: {
+                // example data
+              }
             }
-          }
-        }
-      }
-    }
-  })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Invalid bank details, verification failed, or business setup not completed.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          invalidBank: {
-            summary: 'Invalid bank code error',
+          },
+          inactiveBusinessError: {
+            summary: 'Business not active error',
             value: {
               statusCode: 400,
-              message: 'Invalid bank code for the selected currency',
+              message: 'Business is not active',
               error: 'Bad Request'
             }
           },
-          businessSetupIncomplete: {
-            summary: 'Business setup not completed',
-            value: {
-              statusCode: 400,
-              message: 'Business details must be set up before linking a bank account',
-              error: 'Bad Request'
-            }
-          }
-        }
-      }
-    }
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Business not found.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          businessNotFound: {
+          businessNotFoundError: {
             summary: 'Business not found error',
             value: {
               statusCode: 404,
@@ -359,30 +447,70 @@ export class BusinessController {
   })
   async updateBankAccount(
     @Param('id') id: string,
-    @Body() linkBankDto: LinkBankDto,
-    @Req() req
+    @Query('bankName') bankName?: string,
+    @Query('bankCode') bankCode?: string,
+    @Query('accountNumber') accountNumber?: string,
+    @Query('accountType') accountType?: string,
+    @Req() req?: any
   ) {
-    const ownerId = req.user.id;
-    return this.businessService.updateBankAccount(id, linkBankDto, ownerId);
+    if (!bankCode && !bankName) {
+      throw new BadRequestException('Either bankCode or bankName must be provided');
+    }
+
+    if (!accountNumber) {
+      throw new BadRequestException('Account number is required');
+    }
+
+    if (!accountType) {
+      throw new BadRequestException('Account type is required');
+    }
+
+    // Convert string accountType to enum value
+    let accountTypeEnum: AccountType | undefined;
+    
+    if (accountType === AccountType.POS || accountType === AccountType.CASH) {
+      accountTypeEnum = accountType as AccountType;
+    } else {
+      throw new BadRequestException(`Invalid account type. Must be one of: ${Object.values(AccountType).join(', ')}`);
+    }
+
+    // Extract owner ID from request if available
+    const ownerId = req?.user?.id;
+
+    return this.businessService.updateBankAccount(id, {
+      bankCode,
+      bankName,
+      accountNumber,
+      accountType: accountTypeEnum,
+    }, ownerId);
   }
 
   @Get()
   @ApiOperation({
     summary: 'Get all businesses',
-    description: 'Returns a paginated list of all businesses on the platform (requires authentication)'
+    description: 'Returns a paginated list of all businesses'
   })
-  @ApiQuery({ name: 'page', description: 'Page number', type: 'number', required: false })
-  @ApiQuery({ name: 'limit', description: 'Items per page', type: 'number', required: false })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    description: 'Page number (defaults to 1)' 
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    description: 'Results per page (defaults to 10)' 
+  })
+  @ApiQuery({ 
+    name: 'isVerified', 
+    required: false, 
+    description: 'Filter by verification status (true for verified, false for unverified)' 
+  })
   @ApiResponse({
     status: 200,
-    description: 'List of businesses retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        statusCode: { type: 'number', example: 200 },
-        message: { type: 'string', example: 'Success' },
-        data: {
-          type: 'object',
+    description: 'Returns a paginated list of businesses',
+    content: {
+      'application/json': {
+        schema: {
           properties: {
             businesses: {
               type: 'array',
@@ -398,9 +526,10 @@ export class BusinessController {
   })
   async getAllBusinesses(
     @Query('page') page?: number,
-    @Query('limit') limit?: number
+    @Query('limit') limit?: number,
+    @Query('isVerified') isVerified?: boolean
   ) {
-    return this.businessService.getAllBusinesses(page, limit);
+    return this.businessService.getAllBusinesses(page, limit, isVerified);
   }
 
   @Get('categories/all')
@@ -490,121 +619,80 @@ export class BusinessController {
     };
   }
 
-  @Post(':id/deactivate')
-  @ApiOperation({
-    summary: 'Deactivate a business',
-    description: 'Sets a business as inactive but doesn\'t delete it from the database'
-  })
-  @ApiParam({ name: 'id', description: 'Business ID', type: 'string' })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Business successfully deactivated.',
-    content: {
-      'application/json': {
-        schema: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean', example: true }
-          }
-        },
-        examples: {
-          success: {
-            summary: 'Successful deactivation',
-            value: {
-              success: true
-            }
-          }
-        }
-      }
-    }
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Business not found.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          businessNotFound: {
-            summary: 'Business not found error',
-            value: {
-              statusCode: 404,
-              message: 'Business with ID business-123 not found',
-              error: 'Not Found'
-            }
-          }
-        }
-      }
-    }
-  })
-  @HttpCode(HttpStatus.OK)
-  async deactivateBusiness(@Param('id') id: string, @Req() req) {
-    const ownerId = req.user.id;
-    await this.businessService.deactivateBusiness(id, ownerId);
-    return { message: 'Business deactivated successfully' };
-  }
-
-  @Get('currencies')
   @Public()
+  @Post('verify-bank-account')
   @ApiOperation({
-    summary: 'Get supported currencies',
-    description: 'Returns a list of all currencies supported by the payment processor'
+    summary: 'Verify bank account details without linking to a business',
+    description: 'Validates bank account details using either bank code or bank name (not both) along with account number. Returns bank and account information without linking to a business.'
   })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Return all supported currencies.',
+  @ApiQuery({ 
+    name: 'bankCode', 
+    required: false, 
+    description: 'Bank code (required if bankName is not provided)',
+    type: String
+  })
+  @ApiQuery({ 
+    name: 'bankName', 
+    required: false, 
+    description: 'Bank name (required if bankCode is not provided)',
+    type: String
+  })
+  @ApiQuery({ 
+    name: 'accountNumber', 
+    required: true, 
+    description: 'Account number to verify',
+    type: String
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Bank account verified successfully',
     content: {
       'application/json': {
-        schema: {
-          type: 'array',
-          items: { $ref: getSchemaPath(CurrencyDto) }
-        },
-        examples: {
-          currencies: {
-            summary: 'List of supported currencies',
-            value: [
-              {
-                code: 'NGN',
-                name: 'Nigerian Naira',
-                shortName: 'Naira',
-                decimals: 2,
-                symbol: '₦',
-                marketRate: '1629.59'
-              },
-              {
-                code: 'USD',
-                name: 'US Dollar',
-                shortName: 'USD',
-                decimals: 2,
-                symbol: '$',
-                marketRate: '1'
-              },
-              {
-                code: 'KES',
-                name: 'Kenyan Shilling',
-                shortName: 'KES',
-                decimals: 2,
-                symbol: 'KSh',
-                marketRate: '129.3'
-              }
-            ]
+        example: {
+          statusCode: 200,
+          message: 'Success',
+          data: {
+            bank: {
+              name: 'Access Bank',
+              code: '044'
+            },
+            account: {
+              number: '0123456789',
+              name: 'John Doe'
+            }
           }
         }
       }
     }
   })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Failed to fetch currencies from payment processor.',
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid bank information or account details',
     content: {
       'application/json': {
         schema: { $ref: getSchemaPath(ErrorResponseDto) },
         examples: {
-          apiError: {
-            summary: 'API error',
+          invalidBank: {
+            summary: 'Invalid bank code error',
             value: {
               statusCode: 400,
-              message: 'Failed to fetch supported currencies: API Error',
+              message: 'Invalid bank code: 999999',
+              error: 'Bad Request'
+            }
+          },
+          invalidBankName: {
+            summary: 'Invalid bank name error',
+            value: {
+              statusCode: 400,
+              message: 'Invalid bank name: Nonexistent Bank',
+              error: 'Bad Request'
+            }
+          },
+          verificationFailed: {
+            summary: 'Account verification failed',
+            value: {
+              statusCode: 400,
+              message: 'Account verification failed: Invalid account number',
               error: 'Bad Request'
             }
           }
@@ -612,113 +700,28 @@ export class BusinessController {
       }
     }
   })
-  async getSupportedCurrencies() {
-    return this.businessService.getSupportedCurrencies();
-  }
-
-  @Get('institutions/:currencyCode')
-  @Public()
-  @ApiOperation({
-    summary: 'Get supported financial institutions',
-    description: 'Returns a list of supported banks and financial institutions for a currency'
-  })
-  @ApiParam({ 
-    name: 'currencyCode', 
-    description: 'Currency code (e.g., NGN, USD)', 
-    example: 'NGN',
-    schema: {
-      type: 'string',
-      enum: [
-        'NGN', 'GHS', 'USD', 'EUR', 'GBP'
-      ]
-    }
-  })
-  async getSupportedInstitutions(@Param('currencyCode') currencyCode: string) {
-    return this.businessService.getSupportedInstitutions(currencyCode);
-  }
-
-  @Get('exchange-rate/:currencyCode')
-  @ApiOperation({ 
-    summary: 'Get exchange rate for a currency', 
-    description: 'Returns the current exchange rate between a cryptocurrency token and fiat currency.'
-  })
-  @ApiParam({ 
-    name: 'currencyCode', 
-    description: 'Currency code (e.g., NGN, USD)',
-    type: 'string',
-    example: 'NGN'
-  })
-  @ApiQuery({ 
-    name: 'amount', 
-    required: false, 
-    description: 'Amount to convert (default: "1")',
-    example: '100',
-    type: String
-  })
-  @ApiQuery({ 
-    name: 'tokenCode', 
-    required: false, 
-    description: 'Token code (default: "USDT")',
-    example: 'USDT',
-    type: String
-  })
-  @ApiQuery({ 
-    name: 'providerId', 
-    required: false, 
-    description: 'Provider ID (optional)',
-    example: 'provider-123',
-    type: String
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Return exchange rate for the currency.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ExchangeRateResponseDto) },
-        examples: {
-          exchangeRate: {
-            summary: 'Token to fiat exchange rate',
-            value: {
-              rate: '1629.59',
-              fiatAmount: '162959.00',
-              token: 'USDT',
-              fiat: 'NGN'
-            }
-          }
-        }
-      }
-    }
-  })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Failed to fetch exchange rate from payment processor.',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          apiError: {
-            summary: 'API error',
-            value: {
-              statusCode: 400,
-              message: 'Failed to get exchange rate: API Error',
-              error: 'Bad Request'
-            }
-          }
-        }
-      }
-    }
-  })
-  async getExchangeRate(
-    @Param('currencyCode') currencyCode: string,
-    @Query('amount') amount: string = "1",
-    @Query('tokenCode') tokenCode: string = "USDT",
-    @Query('providerId') providerId?: string
+  async verifyBankAccount(
+    @Query('bankCode') bankCode?: string,
+    @Query('bankName') bankName?: string,
+    @Query('accountNumber') accountNumber?: string
   ) {
-    return this.businessService.getExchangeRate(
-      tokenCode,
-      amount,
-      currencyCode,
-      providerId
-    );
+    this.logger.log(`Verifying bank account with ${bankCode ? 'code' : 'name'}`);
+    
+    if (!accountNumber) {
+      throw new BadRequestException('Account number is required');
+    }
+    
+    if (!bankCode && !bankName) {
+      throw new BadRequestException('Either bank code or bank name must be provided');
+    }
+    
+    // Create a DTO-like object to pass to the service
+    const verifyData: VerifyBankDto = {
+      bankCode,
+      bankName,
+      accountNumber
+    };
+    
+    return this.businessService.verifyBankAccount(verifyData);
   }
 }

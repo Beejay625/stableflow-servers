@@ -53,6 +53,8 @@ describe('AuthService', () => {
   const mockRedisService = {
     getClient: jest.fn().mockReturnValue(mockRedisClient),
     checkConnection: jest.fn().mockResolvedValue(true),
+    get: jest.fn(),
+    del: jest.fn()
   };
 
   const mockMailService = {
@@ -147,7 +149,14 @@ describe('AuthService', () => {
       
       const result = await service.generateOtp(email);
       
-      expect(result).toEqual({ message: 'OTP sent successfully.' });
+      expect(result).toEqual({
+        token: 'otp_requested',
+        userId: 'pending_verification',
+        email: email,
+        role: 'pending',
+        issuedAt: expect.any(Date),
+        expiresAt: expect.any(Date)
+      });
       expect(mockUserRepository.findOne).toHaveBeenCalledWith({ where: { email } });
       expect(mockUserRepository.create).toHaveBeenCalled();
       expect(mockUserRepository.save).toHaveBeenCalled();
@@ -165,7 +174,14 @@ describe('AuthService', () => {
       
       const result = await service.generateOtp(email);
       
-      expect(result).toEqual({ message: 'OTP generated successfully, but email delivery may be delayed.' });
+      expect(result).toEqual({
+        token: 'otp_requested',
+        userId: 'pending_verification',
+        email: email,
+        role: 'pending',
+        issuedAt: expect.any(Date),
+        expiresAt: expect.any(Date)
+      });
       expect(mockMailService.sendMail).toHaveBeenCalled();
     });
 
@@ -258,6 +274,10 @@ describe('AuthService', () => {
     beforeEach(() => {
       // Reset mocks for business repository
       jest.clearAllMocks();
+      
+      // Setup mock behaviors for Redis methods
+      mockRedisService.get.mockImplementation((key) => mockRedisClient.get(key));
+      mockRedisService.del.mockImplementation((key) => mockRedisClient.del(key));
     });
     
     it('should throw an error if user does not exist', async () => {
@@ -278,10 +298,10 @@ describe('AuthService', () => {
       mockUser.email = email;
       
       mockUserRepository.findOne.mockResolvedValue(mockUser);
-      mockRedisClient.get.mockResolvedValue(null); // OTP not found in Redis
+      mockRedisService.get.mockResolvedValue(null); // OTP not found in Redis
       
-      await expect(service.verifyOtpWithBusinessId(email, otp)).rejects.toThrow('OTP has expired or does not exist.');
-      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
+      await expect(service.verifyOtpWithBusinessId(email, otp)).rejects.toThrow('Invalid or expired OTP');
+      expect(mockRedisService.get).toHaveBeenCalledWith(`otp:${email}`);
     });
     
     it('should throw an error if OTP is invalid', async () => {
@@ -293,10 +313,10 @@ describe('AuthService', () => {
       mockUser.email = email;
       
       mockUserRepository.findOne.mockResolvedValue(mockUser);
-      mockRedisClient.get.mockResolvedValue(storedOtp);
+      mockRedisService.get.mockResolvedValue(storedOtp);
       
-      await expect(service.verifyOtpWithBusinessId(email, otp)).rejects.toThrow('Invalid OTP.');
-      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
+      await expect(service.verifyOtpWithBusinessId(email, otp)).rejects.toThrow('Invalid or expired OTP');
+      expect(mockRedisService.get).toHaveBeenCalledWith(`otp:${email}`);
     });
     
     it('should return existing business ID if user already has a business', async () => {
@@ -317,24 +337,24 @@ describe('AuthService', () => {
       };
       
       mockUserRepository.findOne.mockResolvedValue(mockUser);
-      mockRedisClient.get.mockResolvedValue(otp);
+      mockRedisService.get.mockResolvedValue(otp);
       mockBusinessRepository.findOne.mockResolvedValue(mockBusiness);
       
       const result = await service.verifyOtpWithBusinessId(email, otp);
       
       expect(result).toEqual({
-        message: 'Authentication successful',
         token: 'test-token',
-        user: {
-          id: userId,
-          email
-        },
+        userId: userId,
+        email,
+        role: 'user',
+        issuedAt: expect.any(Date),
+        expiresAt: expect.any(Date),
         businessId
       });
       
-      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
-      expect(mockRedisClient.del).toHaveBeenCalledWith(`otp:${email}`);
-      expect(jwtService.sign).toHaveBeenCalledWith({ userId, email });
+      expect(mockRedisService.get).toHaveBeenCalledWith(`otp:${email}`);
+      expect(mockRedisService.del).toHaveBeenCalledWith(`otp:${email}`);
+      expect(jwtService.sign).toHaveBeenCalledWith({ userId, email, businessId });
       expect(mockBusinessRepository.findOne).toHaveBeenCalledWith({ where: { ownerId: userId } });
       expect(mockBusinessRepository.create).not.toHaveBeenCalled();
       expect(mockBusinessRepository.save).not.toHaveBeenCalled();
@@ -353,12 +373,15 @@ describe('AuthService', () => {
       const newBusiness = {
         id: newBusinessId,
         ownerId: userId,
-        name: `Business for ${email}`,
-        phoneNumber: ''
+        name: `${email.split('@')[0]}'s Business`,
+        phoneNumber: '0000000000',
+        onboardingStep: OnboardingStep.NOT_STARTED,
+        isActive: true,
+        isVerified: false
       };
       
       mockUserRepository.findOne.mockResolvedValue(mockUser);
-      mockRedisClient.get.mockResolvedValue(otp);
+      mockRedisService.get.mockResolvedValue(otp);
       mockBusinessRepository.findOne.mockResolvedValue(null); // No existing business
       mockBusinessRepository.create.mockReturnValue(newBusiness);
       mockBusinessRepository.save.mockResolvedValue(newBusiness);
@@ -366,33 +389,27 @@ describe('AuthService', () => {
       const result = await service.verifyOtpWithBusinessId(email, otp);
       
       expect(result).toEqual({
-        message: 'Authentication successful',
         token: 'test-token',
-        user: {
-          id: userId,
-          email
-        },
+        userId: userId,
+        email,
+        role: 'user',
+        issuedAt: expect.any(Date),
+        expiresAt: expect.any(Date),
         businessId: newBusinessId
       });
       
-      expect(mockRedisClient.get).toHaveBeenCalledWith(`otp:${email}`);
-      expect(mockRedisClient.del).toHaveBeenCalledWith(`otp:${email}`);
-      expect(jwtService.sign).toHaveBeenCalledWith({ userId, email });
+      expect(mockRedisService.get).toHaveBeenCalledWith(`otp:${email}`);
+      expect(mockRedisService.del).toHaveBeenCalledWith(`otp:${email}`);
+      expect(jwtService.sign).toHaveBeenCalledWith({ userId, email, businessId: newBusinessId });
       expect(mockBusinessRepository.findOne).toHaveBeenCalledWith({ where: { ownerId: userId } });
-      expect(mockBusinessRepository.create).toHaveBeenCalledWith({
+      expect(mockBusinessRepository.create).toHaveBeenCalledWith(expect.objectContaining({
         ownerId: userId,
-        name: `Business for ${email}`,
-        phoneNumber: '',
-        onboardingStep: OnboardingStep.BUSINESS_SETUP,
-        description: null,
-        isVerified: false,
-        bankCode: null,
-        accountNumber: null,
-        accountName: null,
-        accountType: null,
-        settlementCurrency: null,
-        categoryId: null
-      });
+        name: `${email.split('@')[0]}'s Business`,
+        phoneNumber: '0000000000',
+        onboardingStep: OnboardingStep.NOT_STARTED,
+        isActive: true,
+        isVerified: false
+      }));
       expect(mockBusinessRepository.save).toHaveBeenCalledWith(newBusiness);
     });
   });

@@ -72,3 +72,4 @@ temp/
 
 # Testing
 /jest-results/
+.qodo

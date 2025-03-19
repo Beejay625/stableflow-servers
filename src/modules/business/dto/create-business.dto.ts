@@ -29,16 +29,6 @@ export class CreateBusinessDto {
   phoneNumber?: string;
 
   @IsOptional()
-  @IsString()
-  @Length(0, 500)
-  @ApiProperty({
-    description: 'Business description',
-    example: 'A small retail business selling handmade crafts',
-    required: false
-  })
-  description?: string;
-
-  @IsOptional()
   @IsUUID()
   @ApiProperty({
     description: 'ID of an existing category',

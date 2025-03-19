@@ -52,6 +52,9 @@ export class Business {
   @Column({ length: 20 })
   phoneNumber: string;
 
+  /**
+   * @deprecated This field is no longer used. Will be removed in a future version.
+   */
   @Column({ nullable: true, length: 500 })
   description: string;
 
@@ -67,24 +70,28 @@ export class Business {
 
   // Bank account information
   // These are nullable during initial registration but required for verified businesses
-  @Column({ nullable: true, length: 20 })
+  @Column({ nullable: true })
   bankCode: string;
 
-  @Column({ nullable: true, length: 20 })
+  @Column({ nullable: true })
   accountNumber: string;
 
-  @Column({ nullable: true, length: 50 })
+  @Column({ nullable: true })
+  bankName: string;
+
+  @Column({ nullable: true })
   accountName: string;
 
-  @Column({ 
-    nullable: true, 
-    type: 'enum',
-    enum: Object.values(AccountType)
-  })
-  accountType: AccountType;
+  @Column({ nullable: true })
+  accountType: string;
 
-  @Column({ nullable: true, default: 'USD' })
-  settlementCurrency: string;
+  // Blockchain wallet address
+  @Column({ nullable: true, length: 42 })
+  walletAddress: string;
+
+  // Blockchain wallet ID from BlockRadar
+  @Column({ nullable: true, length: 36 })
+  walletId: string;
 
   // Category relationship using proper TypeORM way to handle circular dependencies
   @ManyToOne(type => Category, category => category.businesses, { 

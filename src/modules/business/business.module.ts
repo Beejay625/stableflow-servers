@@ -6,12 +6,15 @@ import { Business } from './entities/business.entity';
 import { Category } from './entities/category.entity';
 import { BusinessService } from './business.service';
 import { BusinessController } from './business.controller';
+
 import { PaycrestModule } from '../paycrest/paycrest.module';
+import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Business, Category]),
     PaycrestModule,
+    WalletModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

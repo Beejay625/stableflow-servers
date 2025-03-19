@@ -32,4 +32,8 @@ module.exports = {
   bail: false,
   verbose: true,
   notify: true,
+  detectOpenHandles: true,
+  forceExit: true,
+  runInBand: false,
+  cache: false,
 }; 

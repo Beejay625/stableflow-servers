@@ -22,6 +22,7 @@ export const API_PATHS = {
   INSTITUTIONS: '/v1/institutions',
   CURRENCIES: '/v1/currencies',
   EXCHANGE_RATE: '/v1/exchange-rate',
+  TOKEN_RATE: '/v1/rates',
 };
 
 /**

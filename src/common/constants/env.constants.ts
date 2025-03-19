@@ -30,6 +30,12 @@ export const NOREPLY_EMAIL = 'NOREPLY_EMAIL';
 export const ALCHEMY_API_KEY = 'ALCHEMY_API_KEY';
 export const PAYCREST_API_KEY = 'PAYCREST_API_KEY';
 export const PAYCREST_BASE_URL = 'PAYCREST_BASE_URL';
+export const NUBAPI_TOKEN = 'NUBAPI_TOKEN';
+
+// BlockRadar API keys and config
+export const BLOCKRADAR_API_KEY = 'BLOCKRADAR_API_KEY';
+export const WALLET_ID = 'WALLET_ID';
+export const NETWORK = 'NETWORK';
 
 // Security environment variables
 export const JWT_SECRET = 'JWT_SECRET';

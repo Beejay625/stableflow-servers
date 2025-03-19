@@ -46,5 +46,6 @@ export interface Currency {
 export interface ExchangeRateRequest {
   sourceCurrency: string;
   targetCurrency: string;
-  amount: number;
+  amount: string | number;
+  providerId?: string;
 }
