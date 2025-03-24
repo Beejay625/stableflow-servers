@@ -3,10 +3,12 @@ import { ApiProperty } from '@nestjs/swagger';
 import { OnboardingStep } from '../entities/business.entity';
 
 /**
- * DTO for updating a business entity
- * Contains all fields that can be updated via PATCH
+ * DTO for both creating and updating a business entity
+ * All fields are optional to support:
+ * 1. Partial creation (step by step onboarding)
+ * 2. Partial updates (PATCH operations)
  */
-export class UpdateBusinessDto {
+export class BusinessDto {
   @IsOptional()
   @IsString()
   @Length(2, 100)

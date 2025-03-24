@@ -17,21 +17,20 @@ import { QueueModule } from '../queue/queue.module';
 import { WalletController } from './wallet.controller';
 import { JwtModule } from '@nestjs/jwt';
 import { ScheduleModule } from '@nestjs/schedule';
-import { OfframpService } from '../offramp/offramp.service';
-import { OfframpScheduleService } from './schedule/offramp-schedule.service';
-import { OfframpAttempt } from './entities/offramp-attempt.entity';
 import { RedisModule } from '../redis/redis.module';
 import { TransactionRepository } from './repositories/transaction.repository';
 import { MailService } from '../../common/utils/email';
 import { CommonModule } from '../../common/common.module';
 import { TransactionRecoveryService } from './services/transaction-recovery.service';
+import { OfframpModule } from '../offramp/offramp.module';
 
 @Module({
   imports: [
     HttpModule,
     ConfigModule,
     RedisModule,
-    TypeOrmModule.forFeature([Business, User, Transaction, OfframpAttempt]),
+    OfframpModule,
+    TypeOrmModule.forFeature([Business, User, Transaction]),
     BullModule.registerQueue({
       name: 'transactions',
     }),
@@ -61,8 +60,6 @@ import { TransactionRecoveryService } from './services/transaction-recovery.serv
     SortTransactionService,
     WebhookService,
     TransactionProcessor,
-    OfframpService,
-    OfframpScheduleService,
     TransactionRepository,
     MailService,
     TransactionRecoveryService,
@@ -74,7 +71,6 @@ import { TransactionRecoveryService } from './services/transaction-recovery.serv
     GetTransactionService,
     SortTransactionService,
     WebhookService,
-    OfframpService,
     TransactionRepository,
     MailService,
   ],

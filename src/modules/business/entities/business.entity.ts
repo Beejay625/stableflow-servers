@@ -6,12 +6,14 @@ import {
   UpdateDateColumn,
   ManyToOne,
   OneToMany,
+  OneToOne,
   JoinColumn,
   Check
 } from 'typeorm';
 import { User } from '../../auth/entities/auth.entity';
 import { Category } from './category.entity';
 import { Transaction } from '../../wallet/entities/transaction.entity';
+import { BankDetails, AccountType } from './bank-details.entity';
 
 /**
  * Constants for onboarding steps
@@ -25,24 +27,17 @@ export const OnboardingStep = {
 
 export type OnboardingStep = typeof OnboardingStep[keyof typeof OnboardingStep];
 
-/**
- * Constants for account types
- */
-export const AccountType = {
-  POS: 'pos',
-  CASH: 'cash'
-} as const;
-
-export type AccountType = typeof AccountType[keyof typeof AccountType];
+// Re-export AccountType from bank-details.entity
+export { AccountType } from './bank-details.entity';
 
 /**
- * Entity for storing business information including bank details
+ * Entity for storing business information
  * Business verification follows a two-step process:
  * 1. Business entity setup
  * 2. Account details setup
  */
 @Entity('businesses')
-@Check(`"isVerified" = false OR ("bankCode" IS NOT NULL AND "accountNumber" IS NOT NULL AND "onboardingStep" = 'COMPLETED')`)
+@Check(`"isVerified" = false OR ("onboardingStep" = 'COMPLETED')`)
 export class Business {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -52,12 +47,6 @@ export class Business {
 
   @Column({ length: 20 })
   phoneNumber: string;
-
-  /**
-   * @deprecated This field is no longer used. Will be removed in a future version.
-   */
-  @Column({ nullable: true, length: 500 })
-  description: string;
 
   @Column({ default: false })
   isVerified: boolean;
@@ -69,23 +58,6 @@ export class Business {
   })
   onboardingStep: OnboardingStep;
 
-  // Bank account information
-  // These are nullable during initial registration but required for verified businesses
-  @Column({ nullable: true })
-  bankCode: string;
-
-  @Column({ nullable: true })
-  accountNumber: string;
-
-  @Column({ nullable: true })
-  bankName: string;
-
-  @Column({ nullable: true })
-  accountName: string;
-
-  @Column({ nullable: true })
-  accountType: string;
-
   // Blockchain wallet address
   @Column({ nullable: true, length: 42 })
   walletAddress: string;
@@ -94,7 +66,7 @@ export class Business {
   @Column({ nullable: true, length: 36 })
   addressId: string;
 
-  // Category relationship using proper TypeORM way to handle circular dependencies
+  // Category relationship
   @ManyToOne(type => Category, category => category.businesses, { 
     nullable: true,
     eager: true 
@@ -113,8 +85,12 @@ export class Business {
   @Column()
   ownerId: string;
 
-  // Wallet addresses will be linked via a relation from the Wallet module
-  // Transactions will be linked via a relation from the Transaction module
+  // Bank details relationship
+  @OneToOne(() => BankDetails, bankDetails => bankDetails.business, {
+    eager: true,
+    cascade: true
+  })
+  bankDetails: BankDetails;
 
   @Column({ default: true })
   isActive: boolean;

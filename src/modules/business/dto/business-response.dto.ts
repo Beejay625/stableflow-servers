@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { OnboardingStep, AccountType } from '../entities/business.entity';
+import { OnboardingStep } from '../entities/business.entity';
+import { AccountType } from '../entities/bank-details.entity';
 import { Category } from '../entities/category.entity';
 
 export class BankDetailsDto {
@@ -46,6 +47,23 @@ export class WalletDetailsDto {
   metadata: Record<string, any>;
 }
 
+export class SimplifiedCategoryDto {
+  @ApiProperty({ description: 'Unique identifier of the category' })
+  id: string;
+
+  @ApiProperty({ description: 'Name of the category' })
+  name: string;
+
+  @ApiProperty({ description: 'Description of the category', required: false })
+  description?: string;
+
+  @ApiProperty({ description: 'When the category was created' })
+  createdAt: Date;
+
+  @ApiProperty({ description: 'When the category was last updated' })
+  updatedAt: Date;
+}
+
 /**
  * Simplified Business Response DTO
  * Contains only essential information needed for the client
@@ -69,11 +87,11 @@ export class SimplifiedBusinessResponseDto {
   @ApiProperty({ description: 'Status of the business', enum: ['ACTIVE', 'INACTIVE'] })
   business_status: string;
 
-  @ApiProperty({ description: 'Bank details of the business' })
-  bankDetails: BankDetailsDto;
+  @ApiProperty({ description: 'Bank details of the business', required: false })
+  bankDetails?: BankDetailsDto;
 
-  @ApiProperty({ description: 'Wallet details of the business', nullable: true })
-  walletDetails: WalletDetailsDto;
+  @ApiProperty({ description: 'Wallet details of the business', required: false })
+  walletDetails?: WalletDetailsDto;
 
   @ApiProperty({ description: 'User ID who owns the business' })
   user_Id: string;
@@ -100,18 +118,4 @@ export class BusinessResponseDto {
   
   @ApiProperty({ description: 'Wallet details if a wallet was just generated', required: false })
   walletDetails?: WalletDetailsDto;
-}
-
-/**
- * Category information in simplified form
- */
-export class SimplifiedCategoryDto {
-  @ApiProperty({ description: 'Unique identifier of the category' })
-  id: string;
-
-  @ApiProperty({ description: 'Name of the category' })
-  name: string;
-
-  @ApiProperty({ description: 'Whether this is a custom category' })
-  isCustom: boolean;
 } 

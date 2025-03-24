@@ -83,6 +83,9 @@ export class Transaction {
   @Column({ type: 'timestamp', nullable: true })
   processedAt: Date;
 
+  @Column({ type: 'jsonb', nullable: true })
+  preparationData: any;
+
   // Relationships
   @ManyToOne(() => Business, business => business.transactions)
   @JoinColumn({ name: 'businessId' })

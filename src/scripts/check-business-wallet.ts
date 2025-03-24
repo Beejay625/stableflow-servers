@@ -1,56 +1,61 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
-import { Business } from '../modules/business/entities/business.entity';
-import { DataSource } from 'typeorm';
+import { BusinessService } from '../modules/business/business.service';
+import { Logger } from '@nestjs/common';
 
-async function checkBusinessWallet() {
+async function checkBusinessWallet(businessId: string) {
+  const logger = new Logger('CheckBusinessWallet');
+  const app = await NestFactory.createApplicationContext(AppModule);
+  const businessService = app.get(BusinessService);
+
   try {
-    // Get business ID from command line
-    const businessId = process.argv[2];
-    
-    if (!businessId) {
-      console.error('Please provide a business ID as an argument');
+    const businessResponse = await businessService.getBusinessById(businessId, null);
+    const business = businessResponse.data;
+
+    if (!business) {
+      console.error(`Business ${businessId} not found`);
       process.exit(1);
     }
 
-    console.log(`Checking wallet details for business: ${businessId}`);
-    
-    // Create a standalone application
-    const app = await NestFactory.createApplicationContext(AppModule);
-    
-    // Get the DataSource from app context
-    const dataSource = app.get(DataSource);
-    
-    // Get the business repository
-    const businessRepository = dataSource.getRepository(Business);
-    
-    // Find the business
-    const business = await businessRepository.findOne({ where: { id: businessId } });
-    
-    if (!business) {
-      console.error(`Business with ID ${businessId} not found`);
-      process.exit(1);
-    }
-    
-    console.log('Business details:');
-    console.log(`ID: ${business.id}`);
+    console.log('Business Details:');
+    console.log(`ID: ${business.Business_id}`);
     console.log(`Name: ${business.name}`);
-    console.log(`Onboarding step: ${business.onboardingStep}`);
-    console.log(`Wallet address: ${business.walletAddress || 'Not set'}`);
-    console.log(`Address ID: ${business.addressId || 'Not set'}`);
-    console.log(`Bank code: ${business.bankCode || 'Not set'}`);
-    console.log(`Bank name: ${business.bankName || 'Not set'}`);
-    console.log(`Account number: ${business.accountNumber || 'Not set'}`);
-    console.log(`Account name: ${business.accountName || 'Not set'}`);
-    
-    // Close the application
-    await app.close();
-    
+    console.log(`Phone: ${business.phoneNumber}`);
+    console.log(`Onboarding Step: ${business.onboardingStep}`);
+    console.log(`Wallet Address: ${business.walletDetails?.address || 'Not set'}`);
+    console.log(`Address ID: ${business.walletDetails?.addressId || 'Not set'}`);
+
+    if (business.bankDetails) {
+      console.log('\nBank Details:');
+      console.log(`Bank code: ${business.bankDetails.bankCode || 'Not set'}`);
+      console.log(`Bank name: ${business.bankDetails.bankName || 'Not set'}`);
+      console.log(`Account number: ${business.bankDetails.accountNumber || 'Not set'}`);
+      console.log(`Account name: ${business.bankDetails.accountName || 'Not set'}`);
+      console.log(`Account type: ${business.bankDetails.accountType || 'Not set'}`);
+    } else {
+      console.log('\nNo bank details found');
+    }
+
+    console.log('\nBusiness Status:', business.business_status);
+    console.log('Created:', business.createdAt);
+    console.log('Updated:', business.updatedAt);
+
   } catch (error) {
-    console.error('Error checking business wallet:', error);
+    console.error('Error:', error.message);
     process.exit(1);
+  } finally {
+    await app.close();
   }
 }
 
-// Run the check
-checkBusinessWallet(); 
+// Get business ID from command line argument
+const businessId = process.argv[2];
+if (!businessId) {
+  console.error('Please provide a business ID as a command line argument');
+  process.exit(1);
+}
+
+checkBusinessWallet(businessId).catch(error => {
+  console.error('Unhandled error:', error);
+  process.exit(1);
+}); 

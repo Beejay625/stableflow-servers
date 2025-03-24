@@ -1,22 +1,24 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Inject, forwardRef, RequestTimeoutException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Not } from 'typeorm';
-import { Business, OnboardingStep, AccountType } from './entities/business.entity';
+import { Repository, Not, Brackets } from 'typeorm';
+import { Business, OnboardingStep } from './entities/business.entity';
 // Import the Category entity class but use it only for type checking
 import { Category } from './entities/category.entity';
-import { CreateBusinessDto } from './dto/create-business.dto';
-import { UpdateBusinessDto } from './dto/update-business.dto';
+import { BusinessDto } from './dto/update-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse, NigerianBank, NigerianBankResponse, BankValidationResponse } from './interfaces/business.interface';
-import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto, BusinessResponseDto, WalletDetailsDto } from './dto/business-response.dto';
+import { SimplifiedBusinessResponseDto, BusinessResponseDto, WalletDetailsDto } from './dto/business-response.dto';
 import { PaycrestService } from '../paycrest/paycrest.service';
 import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../paycrest/interfaces';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-import { InternalServerErrorException } from '@nestjs/common';
 import { NUBAPI_TOKEN } from '../../common/constants/env.constants';
 import { VerifyBankDto } from './dto/verify-bank.dto';
 import { WalletService } from '../wallet/wallet.service';
+import { BankDetails, AccountType } from './entities/bank-details.entity';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
+import { retryWithBackoff } from '../../common/utils/api-utils';
 
 // Define the UpdateBusinessOptions type
 type UpdateBusinessOptions = {
@@ -26,6 +28,17 @@ type UpdateBusinessOptions = {
   categoryName?: string;
   isActive?: boolean;
 };
+
+interface NubapiResponse {
+  status: string;
+  message: string;
+  data?: {
+    account_name?: string;
+    account_number?: string;
+    bank_code?: string;
+  };
+  account_name?: string;
+}
 
 @Injectable()
 export class BusinessService {
@@ -39,16 +52,17 @@ export class BusinessService {
     private readonly paycrestService: PaycrestService,
     private readonly configService: ConfigService,
     private readonly walletService: WalletService,
+    private readonly httpClient: HttpService,
   ) {}
 
   /**
    * Updates an existing business entity that was created during authentication
    * @param id The business ID from authentication
-   * @param createBusinessDto Data for updating the business entity
+   * @param businessDto Data for updating the business entity
    * @param ownerId ID of the user who owns the business
    * @returns Updated business entity
    */
-  async updateBusinessEntity(id: string, createBusinessDto: CreateBusinessDto, ownerId: string): Promise<Business> {
+  async updateBusinessEntity(id: string, businessDto: BusinessDto, ownerId: string): Promise<Business> {
     this.logger.log(`Updating business entity for ID: ${id}, owner: ${ownerId}`);
 
     // Find the existing business record
@@ -62,82 +76,65 @@ export class BusinessService {
 
     let category: Category | undefined;
 
-    // Only validate category if either categoryId or categoryName is provided
-    if (createBusinessDto.categoryId || createBusinessDto.categoryName) {
-      // Handle category selection or creation
-      if (createBusinessDto.categoryId) {
-        // Find existing category
+    // Handle category updates if provided
+    if (businessDto.categoryId || businessDto.categoryName) {
+      if (businessDto.categoryId) {
+        // Try to find existing category by ID
         category = await this.categoryRepository.findOne({ 
-          where: { id: createBusinessDto.categoryId } 
+          where: [
+            { id: businessDto.categoryId, isCustom: false },
+            { id: businessDto.categoryId, isCustom: true, ownerId }
+          ]
         });
 
         if (!category) {
-          throw new NotFoundException(`Category with ID ${createBusinessDto.categoryId} not found`);
+          throw new NotFoundException(`Category with ID ${businessDto.categoryId} not found or not accessible`);
         }
-      } else if (createBusinessDto.categoryName) {
-        // Check if category with this name already exists
+      } else if (businessDto.categoryName) {
+        // Try to find existing category by name
         category = await this.categoryRepository.findOne({ 
-          where: { name: createBusinessDto.categoryName } 
+          where: [
+            { name: businessDto.categoryName, isCustom: false },
+            { name: businessDto.categoryName, isCustom: true, ownerId }
+          ]
         });
 
-        // Create new custom category if it doesn't exist
         if (!category) {
+          // Create new custom category
           category = this.categoryRepository.create({
-            name: createBusinessDto.categoryName,
+            name: businessDto.categoryName,
             isCustom: true,
+            ownerId,
+            isActive: true
           });
           category = await this.categoryRepository.save(category);
         }
       }
     }
 
-    // Determine the onboarding step based on what fields are populated
+    // Validate required fields
+    const hasName = businessDto.name || existingBusiness.name;
+    const hasPhoneNumber = businessDto.phoneNumber || existingBusiness.phoneNumber;
+
+    if (!hasName || !hasPhoneNumber) {
+      throw new BadRequestException('Business name and phone number are required');
+    }
+
+    // Update onboarding step if needed
     let onboardingStep = existingBusiness.onboardingStep;
-    
-    // Check if the update has completed the business setup step
-    const hasName = createBusinessDto.name || existingBusiness.name;
-    const hasPhoneNumber = createBusinessDto.phoneNumber || existingBusiness.phoneNumber;
-    const hasCategory = category || existingBusiness.category || existingBusiness.categoryId;
-    
-    // If business has name, phone number, and category, it should move to BUSINESS_SETUP
-    if (hasName && hasPhoneNumber && hasCategory && onboardingStep === OnboardingStep.NOT_STARTED) {
-      this.logger.log(`Business ${id} has completed basic details. Moving to BUSINESS_SETUP stage.`);
+    if (onboardingStep === OnboardingStep.NOT_STARTED && category) {
       onboardingStep = OnboardingStep.BUSINESS_SETUP;
     }
     
-    // Check if business already has bank details, which would move it to the next step
-    const hasBankCode = existingBusiness.bankCode;
-    const hasAccountNumber = existingBusiness.accountNumber;
-    const hasAccountName = existingBusiness.accountName;
-    const hasAccountType = existingBusiness.accountType;
-    
-    if (hasName && hasPhoneNumber && hasCategory && hasBankCode && hasAccountNumber && hasAccountName && hasAccountType) {
-      if (onboardingStep === OnboardingStep.BUSINESS_SETUP || onboardingStep === OnboardingStep.NOT_STARTED) {
-      onboardingStep = OnboardingStep.ACCOUNT_SETUP;
-      }
-      
-      // Check if the business is already verified
-      if (existingBusiness.isVerified) {
-        onboardingStep = OnboardingStep.COMPLETED;
-      }
-    }
-
-    // Update business entity with new details
-    const updatedBusiness = {
+    // Update the business entity
+    const updatedBusiness = await this.businessRepository.save({
       ...existingBusiness,
-      ...createBusinessDto,
-      onboardingStep
-    };
+      ...businessDto,
+      category,
+      onboardingStep,
+    });
 
-    // Only set category if it was updated
-    if (category) {
-      updatedBusiness.category = category;
-      updatedBusiness.categoryId = category.id;
-    }
-
-    this.logger.log(`Saving updated business entity for ID: ${id}, onboarding step: ${onboardingStep}`);
-    // Save and return the updated business
-    return this.businessRepository.save(updatedBusiness);
+    return updatedBusiness;
   }
 
   /**
@@ -377,346 +374,206 @@ export class BusinessService {
   ): Promise<BusinessResponseDto> {
     this.logger.log(`Updating/linking bank account for business ${id}`);
 
-    // Find the business with category relation
-    const whereClause: any = { id, isActive: true };
-    if (ownerId) {
-      whereClause.ownerId = ownerId;
-    }
-    
-    const business = await this.businessRepository.findOne({
-      where: whereClause,
-      relations: ['category'],
-    });
-
-    // Variable to store the saved business
-    let savedBusiness: Business;
-
-    if (!business) {
-      this.logger.warn(`Business with ID ${id} not found${ownerId ? ` for owner ${ownerId}` : ''}`);
-      throw new NotFoundException(`Business with ID ${id} not found`);
-    }
-
-    // Check if the business setup step has been completed
-    if (business.onboardingStep === OnboardingStep.NOT_STARTED) {
-      this.logger.warn(`Business ${id} has not completed the business setup step`);
-      throw new BadRequestException('Business details must be set up before linking a bank account');
-    }
-
-    // Validate that at least one field is provided with a non-empty value
-    const hasAccountNumber = linkBankDto.accountNumber && linkBankDto.accountNumber.trim() !== '';
-    const hasBankCode = linkBankDto.bankCode && linkBankDto.bankCode.trim() !== '';
-    const hasBankName = linkBankDto.bankName && linkBankDto.bankName.trim() !== '';
-    const hasAccountName = linkBankDto.accountName && linkBankDto.accountName.trim() !== '';
-    const hasAccountType = linkBankDto.accountType !== undefined;
-
-    // If all fields are empty and business already has bank details, return the existing business
-    const hasExistingBankDetails = business.bankCode && business.accountNumber;
-    if (hasExistingBankDetails && !hasAccountNumber && !hasBankCode && !hasBankName && !hasAccountName && !hasAccountType) {
-      this.logger.log(`No valid bank details provided for update for business ${id}, returning existing data`);
-      const businessResponseDto = new BusinessResponseDto();
-      businessResponseDto.statusCode = 200;
-      businessResponseDto.message = 'No changes applied to bank details';
-      businessResponseDto.data = this.toSimplifiedResponse(business);
-      return businessResponseDto;
-    }
-
-    // Preserve existing values if new values are empty
-    const updatedDto: LinkBankDto = {
-      accountNumber: hasAccountNumber ? linkBankDto.accountNumber : business.accountNumber || '',
-      bankCode: hasBankCode ? linkBankDto.bankCode : business.bankCode || '',
-      bankName: hasBankName ? linkBankDto.bankName : business.bankName || '',
-      accountName: hasAccountName ? linkBankDto.accountName : business.accountName || '',
-      accountType: hasAccountType ? linkBankDto.accountType : (business.accountType as AccountType || AccountType.POS),
-    };
+    // Start a transaction to ensure atomicity
+    const queryRunner = this.businessRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
     try {
-      // If bank name is provided instead of code, resolve the bank code
-      let bankCode = updatedDto.bankCode;
-      let bankName = updatedDto.bankName;
+      // Check if bank account is already linked to another business
+      const existingBusinessWithAccount = await queryRunner.manager
+        .createQueryBuilder(Business, 'business')
+        .leftJoinAndSelect('business.bankDetails', 'bankDetails')
+        .where('bankDetails.accountNumber = :accountNumber', { accountNumber: linkBankDto.accountNumber })
+        .andWhere('bankDetails.bankCode = :bankCode', { bankCode: linkBankDto.bankCode })
+        .andWhere('business.id != :id', { id })
+        .getOne();
+
+      if (existingBusinessWithAccount) {
+        throw new ConflictException('Bank account already linked to another business');
+      }
+
+      // Find the business with category relation
+      const whereClause: any = { id, isActive: true };
+      if (ownerId) {
+        whereClause.ownerId = ownerId;
+      }
       
-      if (!bankCode && bankName) {
-        this.logger.log(`Resolving bank code from bank name: ${bankName}`);
+      const business = await queryRunner.manager.findOne(Business, {
+        where: whereClause,
+        relations: ['category', 'bankDetails'],
+        lock: { mode: 'pessimistic_write' }
+      });
+
+      if (!business) {
+        throw new NotFoundException(`Business with ID ${id} not found`);
+      }
+
+      // Check if the business setup step has been completed
+      if (business.onboardingStep === OnboardingStep.NOT_STARTED) {
+        throw new BadRequestException('Business details must be set up before linking a bank account');
+      }
+
+      // Resolve bank code from name if provided
+      let bankCode = linkBankDto.bankCode;
+      let bankName = linkBankDto.bankName;
+      let changes: string[] = [];
+
+      if (bankName && !bankCode) {
         const nigerianBanks = await this.getNigerianBanks();
-        
-        // Find the bank by name (case insensitive)
         const foundBank = nigerianBanks.find(bank => 
           bank.name.toLowerCase() === bankName.toLowerCase()
         );
         
         if (!foundBank) {
-          // Try partial matching if exact match fails
-          const partialMatch = nigerianBanks.find(bank => 
-            bank.name.toLowerCase().includes(bankName.toLowerCase()) ||
-            bankName.toLowerCase().includes(bank.name.toLowerCase())
-          );
-          
-          if (partialMatch) {
-            bankCode = partialMatch.code;
-            bankName = partialMatch.name;
-          } else {
-            throw new BadRequestException(`Invalid bank name: ${bankName}`);
-          }
-        } else {
-          bankCode = foundBank.code;
-          bankName = foundBank.name;
+          throw new BadRequestException(`Bank name "${bankName}" not found in supported banks list`);
         }
-      } else if (bankCode && !bankName) {
-        // If bank code is provided, get the bank name
-        const nigerianBanks = await this.getNigerianBanks();
-        const foundBank = nigerianBanks.find(bank => bank.code === bankCode);
-        if (foundBank) {
-          bankName = foundBank.name;
-        }
-      }
-      
-      if (!bankCode) {
-        throw new BadRequestException('Either bank code or bank name must be provided');
+        
+        bankCode = foundBank.code;
+        bankName = foundBank.name;
+        changes.push('bank_name_resolved');
       }
 
-      // Verify account through NubaAPI
+      // Verify account through NubaAPI with timeout
       const nubapiToken = this.configService.get(NUBAPI_TOKEN);
       if (!nubapiToken) {
         throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
       }
 
       try {
-        const verifyUrl = `https://nubapi.com/api/verify?account_number=${updatedDto.accountNumber}&bank_code=${bankCode}`;
-        const apiResponse = await axios.get(verifyUrl, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${nubapiToken}`
-          }
-        });
-
-        // Extract account name from response, handling different response formats
-        let accountName = null;
-        if (apiResponse.data?.data?.account_name) {
-          accountName = apiResponse.data.data.account_name;
-        } else if (apiResponse.data?.account_name) {
-          accountName = apiResponse.data.account_name;
-        } else if (apiResponse.data?.data?.accountName) {
-          accountName = apiResponse.data.data.accountName;
-        }
-
-        // If we still don't have an account name, try to find it in the response object
-        if (!accountName && typeof apiResponse.data === 'object') {
-          const searchForAccountName = (obj: any) => {
-            for (const [key, value] of Object.entries(obj)) {
-              if (typeof value === 'string' && key.toLowerCase().includes('name')) {
-                return value;
-              } else if (typeof value === 'object' && value !== null) {
-                const found = searchForAccountName(value);
-                if (found) return found;
-              }
-            }
-            return null;
-          };
-          accountName = searchForAccountName(apiResponse.data);
-        }
-
-        // Use the account name from verification or fallback to provided one
-        const finalAccountName = accountName || updatedDto.accountName;
-
-        // Update business with bank account details
-        const updatedBusiness = {
-          ...business,
-          bankCode,
-          bankName,
-          accountNumber: updatedDto.accountNumber,
-          accountName: finalAccountName,
-          accountType: updatedDto.accountType,
-        };
-
-        // Update onboarding step based on current step
-        if (business.onboardingStep === OnboardingStep.BUSINESS_SETUP) {
-          this.logger.log(`Business ${id} has completed bank account setup. Moving from BUSINESS_SETUP to COMPLETED stage.`);
-          updatedBusiness.onboardingStep = OnboardingStep.COMPLETED;
-        } else if (business.onboardingStep === OnboardingStep.ACCOUNT_SETUP) {
-          this.logger.log(`Business ${id} has completed bank account setup. Moving from ACCOUNT_SETUP to COMPLETED stage.`);
-          updatedBusiness.onboardingStep = OnboardingStep.COMPLETED;
-        } else {
-          this.logger.log(`Business ${id} updated with bank details, but onboarding step remains ${updatedBusiness.onboardingStep}`);
-        }
-
-        // Save the updated business entity
-        savedBusiness = await this.businessRepository.save(updatedBusiness);
+        const verifyUrl = `https://nubapi.com/api/verify?account_number=${linkBankDto.accountNumber}&bank_code=${bankCode}`;
         
-        // When onboarding is completed, generate wallet address immediately instead of in the background
-        let walletGenerationResult = null;
-        let walletGenerationError = null;
+        const apiResponse = await Promise.race([
+          axios.get<NubapiResponse>(verifyUrl, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${nubapiToken}`
+            }
+          }),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Bank verification timeout')), 10000)
+          )
+        ]) as { data: NubapiResponse };
+
+        let accountName = null;
+        const responseData = apiResponse.data;
+        if (responseData.data?.account_name) {
+          accountName = responseData.data.account_name;
+        } else if (responseData.account_name) {
+          accountName = responseData.account_name;
+        }
+
+        if (!accountName && !linkBankDto.accountName) {
+          throw new BadRequestException('Could not verify account. Please provide account name manually.');
+        }
+
+        // Create or update bank details
+        const bankDetails = business.bankDetails || new BankDetails();
+        const previousDetails = { ...bankDetails };
+
+        bankDetails.bankCode = bankCode;
+        bankDetails.bankName = bankName;
+        bankDetails.accountNumber = linkBankDto.accountNumber;
+        bankDetails.accountName = accountName || linkBankDto.accountName;
+        bankDetails.accountType = linkBankDto.accountType;
+        bankDetails.businessId = business.id;
+        bankDetails.lastVerifiedAt = new Date();
+
+        // Track changes
+        if (previousDetails.bankCode !== bankDetails.bankCode) changes.push('bank_code_updated');
+        if (previousDetails.bankName !== bankDetails.bankName) changes.push('bank_name_updated');
+        if (previousDetails.accountNumber !== bankDetails.accountNumber) changes.push('account_number_updated');
+        if (previousDetails.accountName !== bankDetails.accountName) changes.push('account_name_updated');
+        if (previousDetails.accountType !== bankDetails.accountType) changes.push('account_type_updated');
+
+        // Update business with bank details
+        business.bankDetails = bankDetails;
+
+        // Update onboarding step if appropriate
+        if (business.onboardingStep === OnboardingStep.BUSINESS_SETUP) {
+          business.onboardingStep = OnboardingStep.COMPLETED;
+          changes.push('onboarding_completed');
+        }
+
+        // Save the updated business within the transaction
+        const savedBusiness = await queryRunner.manager.save(business);
+
+        // Generate wallet if needed
         if (savedBusiness.onboardingStep === OnboardingStep.COMPLETED && !savedBusiness.walletAddress) {
           try {
-            this.logger.log(`Business ${savedBusiness.id} has been verified. Generating wallet address immediately.`);
-            console.log(`[DEBUG] Attempting to generate wallet for business ${savedBusiness.id}`);
-            walletGenerationResult = await this.walletService.generateWalletForCompletedBusiness(savedBusiness.id);
-            
-            console.log(`[DEBUG] Wallet generation result:`, JSON.stringify(walletGenerationResult));
-            
-            if (walletGenerationResult && walletGenerationResult.data) {
-              // Fetch the business again to get the updated wallet address that was saved by wallet service
-              const businessWithWallet = await this.businessRepository.findOne({
+            const walletResult = await Promise.race([
+              this.walletService.generateWalletForCompletedBusiness(savedBusiness.id),
+              new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Wallet generation timeout')), 15000)
+              )
+            ]);
+
+            if (walletResult?.data?.address) {
+              changes.push('wallet_generated');
+              // Verify the wallet was saved
+              const updatedBusiness = await queryRunner.manager.findOne(Business, {
                 where: { id: savedBusiness.id },
-                relations: ['category'],
+                relations: ['category', 'bankDetails']
               });
-              
-              console.log(`[DEBUG] Business after wallet generation:`, 
-                businessWithWallet ? 
-                `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
-                'Business not found');
-              
-              if (businessWithWallet) {
-                savedBusiness = businessWithWallet;
-                console.log(`[DEBUG] Updated savedBusiness with wallet info:`, 
-                  `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
+
+              if (!updatedBusiness?.walletAddress) {
+                throw new Error('Wallet address not saved');
               }
+
+              await queryRunner.commitTransaction();
+
+              const businessResponse = new BusinessResponseDto();
+              businessResponse.statusCode = 200;
+              businessResponse.message = changes.length > 0 
+                ? `Bank account linked successfully. Changes: ${changes.join(', ')}`
+                : 'No changes were necessary';
+              businessResponse.data = this.toSimplifiedResponse(updatedBusiness);
               
-              this.logger.log(`Wallet address generated for business ${savedBusiness.id}`);
+              return businessResponse;
             } else {
-              console.log(`[DEBUG] No wallet data in generation result`);
-              walletGenerationError = "No wallet data returned from wallet generation";
+              throw new Error('Wallet generation failed');
             }
-          } catch (error) {
-            // Log the error but don't fail the request if wallet creation fails
-            console.error(`[DEBUG] Wallet generation error:`, error);
-            this.logger.error(`Error generating wallet: ${error.message}`, error.stack);
-            walletGenerationError = error.message;
+          } catch (walletError) {
+            // If wallet generation fails, rollback and ask user to try again
+            await queryRunner.rollbackTransaction();
+            throw new BadRequestException(
+              'Bank details verified but wallet generation failed. Please try again in a few minutes.'
+            );
           }
-        } else {
-          console.log(`[DEBUG] Skipping wallet generation - onboardingStep: ${savedBusiness.onboardingStep}, walletAddress: ${savedBusiness.walletAddress || 'none'}`);
         }
+
+        // If no wallet needed, commit transaction
+        await queryRunner.commitTransaction();
 
         const businessResponse = new BusinessResponseDto();
         businessResponse.statusCode = 200;
-        
-        // Adjust message based on wallet generation result
-        if (walletGenerationError) {
-          businessResponse.message = `Bank account linked successfully, but wallet generation failed: ${walletGenerationError}`;
-        } else {
-          businessResponse.message = 'Bank account linked successfully';
-        }
-        
+        businessResponse.message = changes.length > 0 
+          ? `Bank account linked successfully. Changes: ${changes.join(', ')}`
+          : 'No changes were necessary';
         businessResponse.data = this.toSimplifiedResponse(savedBusiness);
-        
-        // If business has a wallet address after all operations, make sure it's included in the response
-        if (savedBusiness.walletAddress && savedBusiness.addressId) {
-          if (!businessResponse.data.walletDetails) {
-            // Create wallet details if they don't exist in the response
-            businessResponse.data.walletDetails = {
-              addressId: savedBusiness.addressId,
-              address: savedBusiness.walletAddress,
-              network: 'mainnet',
-              isEvmCompatible: true,
-              metadata: {
-                business_id: savedBusiness.id,
-                user_id: savedBusiness.ownerId
-              }
-            };
-          }
-        }
         
         return businessResponse;
 
       } catch (error) {
-        // Log the error but continue with saving if we have account details
-        this.logger.warn(`Error verifying account: ${error.message}`);
-        
-        // If we have account name from DTO, use it
-        if (updatedDto.accountName) {
-          const updatedBusiness = {
-            ...business,
-            bankCode,
-            bankName,
-            accountNumber: updatedDto.accountNumber,
-            accountName: updatedDto.accountName,
-            accountType: updatedDto.accountType,
-          };
-
-          if (!business.bankCode && updatedBusiness.onboardingStep === OnboardingStep.BUSINESS_SETUP) {
-            updatedBusiness.onboardingStep = OnboardingStep.ACCOUNT_SETUP;
-          }
-
-          savedBusiness = await this.businessRepository.save(updatedBusiness);
-          
-          // Only proceed to COMPLETED if bank info looks complete
-          if (savedBusiness.bankCode && 
-              savedBusiness.accountNumber && 
-              savedBusiness.accountName && 
-              savedBusiness.onboardingStep === OnboardingStep.ACCOUNT_SETUP) {
-            savedBusiness.onboardingStep = OnboardingStep.COMPLETED;
-            await this.businessRepository.save(savedBusiness);
-          }
-          
-          // Generate wallet address if business is in COMPLETED state and doesn't have a wallet
-          let walletGenerationResult = null;
-          if (savedBusiness.onboardingStep === OnboardingStep.COMPLETED && !savedBusiness.walletAddress) {
-            try {
-              this.logger.log(`Business ${savedBusiness.id} has been verified. Generating wallet address immediately.`);
-              console.log(`[DEBUG] Attempting to generate wallet for business ${savedBusiness.id} (fallback path)`);
-              walletGenerationResult = await this.walletService.generateWalletForCompletedBusiness(savedBusiness.id);
-              
-              console.log(`[DEBUG] Wallet generation result (fallback):`, JSON.stringify(walletGenerationResult));
-              
-              if (walletGenerationResult && walletGenerationResult.data && walletGenerationResult.data.data) {
-                // Fetch the business again to get the updated wallet address that was saved by wallet service
-                const businessWithWallet = await this.businessRepository.findOne({
-                  where: { id: savedBusiness.id },
-                  relations: ['category'],
-                });
-                
-                console.log(`[DEBUG] Business after wallet generation (fallback):`, 
-                  businessWithWallet ? 
-                  `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
-                  'Business not found');
-                
-                if (businessWithWallet) {
-                  savedBusiness = businessWithWallet;
-                  console.log(`[DEBUG] Updated savedBusiness with wallet info (fallback):`, 
-                    `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
-                }
-                
-                this.logger.log(`Wallet address ${walletGenerationResult.data.data.address} generated for business ${savedBusiness.id}`);
-              } else {
-                console.log(`[DEBUG] No wallet data in generation result (fallback)`);
-              }
-            } catch (error) {
-              // Log the error but don't fail the request if wallet creation fails
-              console.error(`[DEBUG] Wallet generation error (fallback):`, error);
-              this.logger.error(`Error generating wallet: ${error.message}`, error.stack);
-            }
-          } else {
-            console.log(`[DEBUG] Skipping wallet generation (fallback) - onboardingStep: ${savedBusiness.onboardingStep}, walletAddress: ${savedBusiness.walletAddress || 'none'}`);
-          }
-          
-          const businessResponse = new BusinessResponseDto();
-          businessResponse.statusCode = 200;
-          businessResponse.message = 'Bank account linked successfully';
-          businessResponse.data = this.toSimplifiedResponse(savedBusiness);
-          
-          // If wallet was generated, add wallet details to the response
-          if (walletGenerationResult && walletGenerationResult.data) {
-            businessResponse.data.walletDetails = {
-              addressId: savedBusiness.addressId,
-              address: savedBusiness.walletAddress,
-              network: 'mainnet',
-              isEvmCompatible: true,
-              metadata: {
-                business_id: savedBusiness.id,
-                user_id: savedBusiness.ownerId
-              }
-            };
-          }
-          
-          return businessResponse;
-        } else {
-          throw new BadRequestException('Account verification failed and no account name provided');
+        await queryRunner.rollbackTransaction();
+        if (error.message === 'Bank verification timeout') {
+          throw new RequestTimeoutException('Bank verification service is temporarily unavailable. Please try again.');
         }
+        throw error;
       }
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       this.logger.error(`Error with bank account: ${error.message}`, error.stack);
-      if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof InternalServerErrorException) {
+      if (error instanceof BadRequestException || 
+          error instanceof NotFoundException || 
+          error instanceof InternalServerErrorException ||
+          error instanceof RequestTimeoutException ||
+          error instanceof ConflictException) {
         throw error;
       }
       throw new BadRequestException(`Bank account operation failed: ${error.message}`);
+    } finally {
+      await queryRunner.release();
     }
   }
 
@@ -729,6 +586,7 @@ export class BusinessService {
   async verifyBusiness(id: string, ownerId: string): Promise<BusinessResponseDto> {
     const business = await this.businessRepository.findOne({
       where: { id, ownerId },
+      relations: ['bankDetails'],
     });
 
     if (!business) {
@@ -741,79 +599,40 @@ export class BusinessService {
     }
 
     // Verify that bank details are complete
-    if (!business.bankCode || !business.accountNumber) {
+    if (!business.bankDetails?.bankCode || !business.bankDetails?.accountNumber) {
       throw new BadRequestException('Bank details are incomplete');
     }
 
     // Mark business as verified and onboarding as completed
-    const verifiedBusiness: Business = {
-      ...business,
-      isVerified: true,
-      onboardingStep: OnboardingStep.COMPLETED,
-    };
+    business.isVerified = true;
+    business.onboardingStep = OnboardingStep.COMPLETED;
 
     // Save the updated business
-    let savedBusiness = await this.businessRepository.save(verifiedBusiness);
+    let savedBusiness = await this.businessRepository.save(business);
 
     // Generate wallet immediately for the business that just completed onboarding
     let walletGenerationResult = null;
-    if (!savedBusiness.walletAddress) {
-      try {
-        this.logger.log(`Business ${savedBusiness.id} has been verified. Generating wallet address immediately.`);
-        console.log(`[DEBUG] Attempting to generate wallet for business ${savedBusiness.id}`);
-        walletGenerationResult = await this.walletService.generateWalletForCompletedBusiness(savedBusiness.id);
-        
-        console.log(`[DEBUG] Wallet generation result:`, JSON.stringify(walletGenerationResult));
-        
-        if (walletGenerationResult && walletGenerationResult.data) {
-          // Fetch the business again to get the updated wallet address that was saved by wallet service
-          const businessWithWallet = await this.businessRepository.findOne({
+
+    try {
+      walletGenerationResult = await this.generateWalletForBusiness(savedBusiness.id);
+      savedBusiness = await this.businessRepository.findOne({
             where: { id: savedBusiness.id },
-            relations: ['category'],
-          });
-          
-          console.log(`[DEBUG] Business after wallet generation:`, 
-            businessWithWallet ? 
-            `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
-            'Business not found');
-          
-          if (businessWithWallet) {
-            savedBusiness = businessWithWallet;
-            console.log(`[DEBUG] Updated savedBusiness with wallet info:`, 
-              `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
-          }
-          
-          this.logger.log(`Wallet address generated for business ${savedBusiness.id}`);
-        } else {
-          console.log(`[DEBUG] No wallet data in generation result`);
-        }
+        relations: ['category', 'bankDetails'],
+      });
       } catch (error) {
-        // Log the error but don't fail the request if wallet creation fails
-        console.error(`[DEBUG] Wallet generation error:`, error);
-        this.logger.error(`Error generating wallet: ${error.message}`, error.stack);
-      }
+      this.logger.error(`Failed to generate wallet for business ${id}: ${error.message}`);
+      // Don't throw error, just log it and continue
     }
 
-    const businessResponse = new BusinessResponseDto();
-    businessResponse.statusCode = 200;
-    businessResponse.message = 'Business verified successfully';
-    businessResponse.data = this.toSimplifiedResponse(savedBusiness);
-    
-    // If wallet was generated, add wallet details to the response
-    if (walletGenerationResult && walletGenerationResult.data) {
-      businessResponse.data.walletDetails = {
-        addressId: savedBusiness.addressId,
-        address: savedBusiness.walletAddress,
-        network: 'mainnet',
-        isEvmCompatible: true,
-        metadata: {
-          business_id: savedBusiness.id,
-          user_id: savedBusiness.ownerId
-        }
-      };
+    const response = new BusinessResponseDto();
+    response.statusCode = 200;
+    response.message = 'Business verified successfully';
+    response.data = this.toSimplifiedResponse(savedBusiness);
+    if (walletGenerationResult) {
+      response.walletDetails = walletGenerationResult;
     }
-    
-    return businessResponse;
+
+    return response;
   }
 
   /**
@@ -863,10 +682,10 @@ export class BusinessService {
         // Apply the same verification logic as in getBusinessById but use onboardingStep
         if (
           business.onboardingStep === OnboardingStep.ACCOUNT_SETUP &&
-          business.bankCode && 
-          business.accountNumber && 
-          business.accountName && 
-          business.accountType &&
+          business.bankDetails?.bankCode && 
+          business.bankDetails?.accountNumber && 
+          business.bankDetails?.accountName && 
+          business.bankDetails?.accountType &&
           business.name &&
           business.phoneNumber &&
           (business.categoryId || business.category)
@@ -929,34 +748,60 @@ export class BusinessService {
   async getAllCategories(name?: string): Promise<CategoryListResponse> {
     this.logger.log(`Fetching business categories${name ? ` with name: ${name}` : ''}`);
     try {
-      let query = 'SELECT * FROM public.categories WHERE "isActive" = true';
+      // Base query for active categories
+      let query = this.categoryRepository.createQueryBuilder('category')
+        .where('"isActive" = true')
+        .andWhere(new Brackets(qb => {
+          // Include all non-custom categories
+          qb.where('"isCustom" = false');
+        }));
       
       // Add name filter if provided
       if (name) {
-        query += ` AND name = $1`;
-        const categories = await this.categoryRepository.query(query, [name]);
-        
-        this.logger.debug(`Found ${categories.length} active categories with name: ${name}`);
-
-    return {
-      categories,
-      total: categories.length,
-    };
+        query = query.andWhere('name = :name', { name });
       }
       
-      // If no name filter, get all categories
-      query += ' ORDER BY name ASC';
-      const categories = await this.categoryRepository.query(query);
+      // Get categories and count
+      const [categories, total] = await query
+        .orderBy('name', 'ASC')
+        .getManyAndCount();
       
       this.logger.debug(`Found ${categories.length} active categories`);
 
-      return {
-        categories,
-        total: categories.length,
+    return {
+      categories,
+        total,
       };
     } catch (error) {
       this.logger.error(`Error fetching categories: ${error.message}`, error.stack);
-      // Return empty result on error
+      return {
+        categories: [],
+        total: 0,
+      };
+    }
+  }
+
+  // Add a new method to get custom categories for a user
+  async getCustomCategories(ownerId: string): Promise<CategoryListResponse> {
+    this.logger.log(`Fetching custom categories for user ${ownerId}`);
+    try {
+      const [categories, total] = await this.categoryRepository.findAndCount({
+        where: {
+          isActive: true,
+          isCustom: true,
+          ownerId,
+        },
+        order: {
+          name: 'ASC',
+        },
+      });
+
+      return {
+        categories,
+        total,
+      };
+    } catch (error) {
+      this.logger.error(`Error fetching custom categories: ${error.message}`, error.stack);
       return {
         categories: [],
         total: 0,
@@ -969,21 +814,16 @@ export class BusinessService {
    * @returns List of supported currencies
    */
   async getSupportedCurrencies(): Promise<Currency[]> {
-    try {
-      this.logger.log('Fetching supported currencies from Paycrest API');
-      const currencyResponse = await this.paycrestService.getSupportedCurrencies();
-      
-      if (currencyResponse.status === 'success' && Array.isArray(currencyResponse.data)) {
-        this.logger.debug(`Successfully fetched ${currencyResponse.data.length} currencies`);
-        return currencyResponse.data;
-      } else {
-        this.logger.warn('Currency API returned unexpected format');
-        throw new BadRequestException('Failed to fetch currencies: API returned unexpected format');
+    // Since we're focusing on NGN only, return a static list
+    return [
+      {
+        code: 'NGN',
+        name: 'Nigerian Naira',
+        symbol: '₦',
+        shortName: 'NGN',
+        decimals: 2
       }
-    } catch (error) {
-      this.logger.error(`Failed to fetch supported currencies: ${error.message}`, error.stack);
-      throw new BadRequestException(`Failed to fetch currencies: ${error.message}`);
-    }
+    ];
   }
   
   /**
@@ -993,518 +833,139 @@ export class BusinessService {
    */
   async getSupportedInstitutions(currencyCode?: string): Promise<Institution[]> {
     try {
-      this.logger.log(`Fetching Nigerian banks`);
+      this.logger.log(`Fetching supported institutions${currencyCode ? ` for currency ${currencyCode}` : ''}`);
+      const response = await this.paycrestService.getInstitutions(currencyCode);
       
-      // Using the correct NubaAPI endpoint
-      const banksResponse = await axios.get('https://nubapi.com/banks');
-      
-      // Log the response data for debugging
-      this.logger.debug(`API Response: ${JSON.stringify(banksResponse.data)}`);
-      
-      // Check if response data is in a valid format
-      if (banksResponse.status === 200 && typeof banksResponse.data === 'object') {
-        // NubaAPI returns an object with bank codes as keys and bank names as values
-        const institutions: Institution[] = [];
-        
-        // Process the response which is an object where keys are bank codes and values are bank names
-        Object.entries(banksResponse.data).forEach(([code, name]) => {
-          institutions.push({
-            name: name as string,
-            code,
-            type: 'bank' as const, // Use const assertion to ensure type is narrowed to 'bank'
-            supportedCurrencies: ['NGN'] // Only Nigerian Naira is supported
-          });
-        });
-        
-        if (institutions.length > 0) {
-          this.logger.debug(`Successfully fetched ${institutions.length} Nigerian banks as institutions`);
-          return institutions;
-        } else {
-          this.logger.warn(`Bank API returned data but no institutions were parsed`);
-          throw new BadRequestException('Failed to fetch banks: No institutions found in API response');
-        }
+      if (Array.isArray(response)) {
+        this.logger.debug(`Successfully fetched ${response.length} institutions`);
+        return response;
       } else {
-        this.logger.warn(`Bank API returned non-200 status or invalid data format: ${banksResponse.status}`);
-        throw new BadRequestException(`Failed to fetch banks: API returned status ${banksResponse.status} or invalid data format`);
+        this.logger.warn('Institutions API returned unexpected format');
+        throw new BadRequestException('Failed to fetch institutions: API returned unexpected format');
       }
     } catch (error) {
-      this.logger.error(`Failed to fetch Nigerian banks: ${error.message}`, error.stack);
-      
-      // If this is an axios error with a response, log the response details
-      if (error.response) {
-        this.logger.error(`API Error Response: ${JSON.stringify(error.response.data)}`);
-      }
-      
-      throw new BadRequestException(`Failed to fetch banks: ${error.message}`);
+      this.logger.error(`Failed to fetch supported institutions: ${error.message}`, error.stack);
+      throw new BadRequestException(`Failed to fetch institutions: ${error.message}`);
     }
   }
 
   /**
-   * Gets the exchange rate for a cryptocurrency to fiat conversion
-   * @param tokenOrData The token code or data object with exchange rate params
-   * @param amount The amount to convert (optional if first param is object)
-   * @param fiat The fiat currency code (optional if first param is object)
-   * @param providerId The provider ID (optional)
-   * @returns Exchange rate and calculated fiat amount
+   * Get list of Nigerian banks from Paycrest
    */
-  async getExchangeRate(
-    tokenOrData: string | {
-      currencyCode: string;
-      amount: string;
-      tokenCode: string;
-      providerId?: string;
-    },
-    amount?: string,
-    fiat?: string,
-    providerId?: string
-  ): Promise<ExchangeRateResponse> {
-    try {
-      let tokenCode: string;
-      let currencyCode: string;
-      let amountValue: string;
-      let providerIdValue: string | undefined;
-      
-      // Handle both parameter forms (for backward compatibility with tests)
-      if (typeof tokenOrData === 'string') {
-        // Individual parameters form (used in tests)
-        tokenCode = tokenOrData;
-        amountValue = amount || '1';
-        currencyCode = fiat || 'USD';
-        providerIdValue = providerId;
-        
-        this.logger.debug(`Getting token rate for ${amountValue} ${tokenCode} to ${currencyCode}`);
-        
-        // Use the direct token rate endpoint for this parameter format
-        const tokenRateResponse = await this.paycrestService.getTokenRate(
-          tokenCode,
-          amountValue,
-          currencyCode,
-          providerIdValue
-        );
-        
-        // The token rate response format may differ from exchange rate
-        // Adjust this part based on the actual response structure
-        return {
-          rate: tokenRateResponse.data,
-          fiatAmount: (parseFloat(tokenRateResponse.data) * parseFloat(amountValue)).toFixed(2),
-          token: tokenCode,
-          fiat: currencyCode
-        };
-      } else {
-        // Object parameter form (used in controllers)
-        const data = tokenOrData;
-        tokenCode = data.tokenCode;
-        amountValue = data.amount;
-        currencyCode = data.currencyCode;
-        providerIdValue = data.providerId;
-        
-        this.logger.debug(`Getting exchange rate for ${amountValue} ${tokenCode} to ${currencyCode}`);
-        
-        // Use either method based on what we're trying to do
-        // For the v1/rates endpoint, use getTokenRate
-        if (tokenCode === 'USDT' || tokenCode === 'USDC') {
-          const tokenResponse = await this.paycrestService.getTokenRate(
-            tokenCode,
-            amountValue,
-            currencyCode,
-            providerIdValue
-          );
-          
-          // The token rate response format may differ from exchange rate
-          // Adjust this part based on the actual response structure
-          return {
-            rate: tokenResponse.data,
-            fiatAmount: (parseFloat(tokenResponse.data) * parseFloat(amountValue)).toFixed(2),
-            token: tokenCode,
-            fiat: currencyCode
-          };
-        } else {
-          // Otherwise use the regular exchange rate endpoint
-          const exchangeRateResponse = await this.paycrestService.getExchangeRate({
-            sourceCurrency: tokenCode,
-            amount: amountValue,
-            targetCurrency: currencyCode,
-            providerId: providerIdValue
-          });
-          
-          return {
-            rate: exchangeRateResponse.data.rate,
-            fiatAmount: exchangeRateResponse.data.targetAmount,
-            token: tokenCode,
-            fiat: currencyCode
-          };
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Error getting exchange rate: ${error.message}`, error.stack);
-      throw new BadRequestException(`Failed to get exchange rate: ${error.message}`);
-    }
+  async getNigerianBanks(): Promise<Institution[]> {
+    return this.getSupportedInstitutions('NGN');
   }
 
   /**
-   * Get a list of Nigerian banks from the NubaAPI
-   * @returns Array of Nigerian banks with their names and codes
-   */
-  async getNigerianBanks(): Promise<NigerianBank[]> {
-    try {
-      this.logger.log(`Fetching Nigerian banks from API`);
-      
-      // Use the correct NubaAPI endpoint
-      const banksApiResponse = await axios.get('https://nubapi.com/banks');
-      
-      // Log the response data for debugging
-      this.logger.debug(`API Response: ${JSON.stringify(banksApiResponse.data)}`);
-      
-      // Check if response data is in a valid format
-      if (banksApiResponse.status === 200 && typeof banksApiResponse.data === 'object') {
-        // NubaAPI returns an object with bank codes as keys and bank names as values
-        const banks: NigerianBank[] = [];
-        
-        // Process the response which is an object where keys are bank codes and values are bank names
-        Object.entries(banksApiResponse.data).forEach(([code, name]) => {
-          banks.push({
-            code,
-            name: name as string
-          });
-        });
-        
-        if (banks.length > 0) {
-          this.logger.debug(`Successfully fetched ${banks.length} Nigerian banks`);
-          return banks;
-        } else {
-          this.logger.warn(`Bank API returned data but no banks were parsed`);
-          throw new BadRequestException('Failed to fetch banks: No banks found in API response');
-        }
-      } else {
-        this.logger.warn(`Bank API returned non-200 status or invalid data format: ${banksApiResponse.status}`);
-        throw new BadRequestException(`Failed to fetch banks: API returned status ${banksApiResponse.status} or invalid data format`);
-      }
-    } catch (error) {
-      this.logger.error(`Failed to fetch Nigerian banks: ${error.message}`, error.stack);
-      
-      // If this is an axios error with a response, log the response details
-      if (error.response) {
-        this.logger.error(`API Error Response: ${JSON.stringify(error.response.data)}`);
-      }
-      
-      throw new BadRequestException(`Failed to fetch banks: ${error.message}`);
-    }
-  }
-
-  /**
-   * Converts a Business entity to a simplified response DTO
-   * @param business The business entity to convert
-   * @returns SimplifiedBusinessResponseDto
-   */
-  private toSimplifiedResponse(business: Business): SimplifiedBusinessResponseDto {
-    const simplified = new SimplifiedBusinessResponseDto();
-    simplified.Business_id = business.id;
-    simplified.name = business.name;
-    simplified.phoneNumber = business.phoneNumber;
-    simplified.category = business.category;
-    // Remove isVerified field as onboardingStep indicates verification status
-    simplified.onboardingStep = business.onboardingStep;
-    simplified.bankDetails = {
-      bankCode: business.bankCode,
-      bankName: business.bankName,
-      accountNumber: business.accountNumber,
-      accountName: business.accountName,
-      accountType: business.accountType as AccountType,
-      createdAt: business.createdAt,
-      updatedAt: business.updatedAt
-    };
-    simplified.walletDetails = this.getWalletDetails(business);
-    // Remove categoryId as it's redundant with category.id
-    simplified.user_Id = business.ownerId;
-    // Set business_status based on onboardingStep
-    simplified.business_status = business.onboardingStep === 'COMPLETED' ? 'ACTIVE' : 'INACTIVE';
-    simplified.createdAt = business.createdAt;
-    simplified.updatedAt = business.updatedAt;
-    
-    return simplified;
-  }
-
-  /**
-   * Verifies a bank account without linking it to a business
-   * @param verifyBankDto DTO with bank code/name and account number
-   * @returns Verified bank account details
-   */
-  async verifyBankAccount(
-    verifyBankDto: VerifyBankDto,
-  ): Promise<BankValidationResponse> {
-    this.logger.log(`Verifying bank account details`);
-
-    try {
-      // If bank name is provided instead of code, resolve the bank code
-      let bankCode = verifyBankDto.bankCode;
-      let bankName = verifyBankDto.bankName;
-      
-      // Remove special case handling for KUDA MICROFINANCE BANK
-      if (!bankCode && bankName) {
-        this.logger.log(`Resolving bank code from bank name: ${bankName}`);
-        const nigerianBanks = await this.getNigerianBanks();
-        
-        // Find the bank by name (case insensitive)
-        const foundBank = nigerianBanks.find(bank => 
-          bank.name.toLowerCase() === bankName.toLowerCase()
-        );
-        
-        if (!foundBank) {
-          // Try partial matching if exact match fails
-          const partialMatch = nigerianBanks.find(bank => 
-            bank.name.toLowerCase().includes(bankName.toLowerCase()) ||
-            bankName.toLowerCase().includes(bank.name.toLowerCase())
-          );
-          
-          if (partialMatch) {
-            this.logger.log(`Found partial match for bank name: ${bankName} -> ${partialMatch.name}`);
-            bankCode = partialMatch.code;
-            bankName = partialMatch.name;
-          } else {
-            this.logger.warn(`Could not find bank with name: ${bankName}`);
-            throw new BadRequestException(`Invalid bank name: ${bankName}`);
-          }
-        } else {
-          bankCode = foundBank.code;
-          bankName = foundBank.name;
-        }
-        
-        this.logger.log(`Resolved bank code: ${bankCode} for bank name: ${bankName}`);
-      } else if (bankCode && !bankName) {
-        // If bank code is provided, validate and get the name
-        this.logger.log(`Validating bank code and retrieving bank name: ${bankCode}`);
-        const nigerianBanks = await this.getNigerianBanks();
-        
-        const foundBank = nigerianBanks.find(bank => 
-          bank.code === bankCode
-        );
-        
-        if (!foundBank) {
-          this.logger.warn(`Could not find bank with code: ${bankCode}`);
-          throw new BadRequestException(`Invalid bank code: ${bankCode}`);
-        }
-        
-        bankName = foundBank.name;
-        this.logger.log(`Retrieved bank name: ${bankName} for bank code: ${bankCode}`);
-      }
-      
-      if (!bankCode) {
-        throw new BadRequestException('Either bank code or bank name must be provided');
-      }
-      
-      // Verify account through NubaAPI
-      this.logger.log(`Verifying account through NubaAPI for account number: ${verifyBankDto.accountNumber} and bank code: ${bankCode}`);
-      
-      const nubapiToken = this.configService.get(NUBAPI_TOKEN);
-      if (!nubapiToken) {
-        throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
-      }
-      
-      try {
-        // Log the complete URL being called
-        const verifyUrl = `https://nubapi.com/api/verify?account_number=${verifyBankDto.accountNumber}&bank_code=${bankCode}`;
-        this.logger.debug(`Calling NubaAPI URL: ${verifyUrl}`);
-        
-        // Make the API call with proper error handling
-        const apiResponse = await axios.get(verifyUrl, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${nubapiToken}`
-          }
-        });
-        
-        // Log the full response for debugging
-        this.logger.debug(`NubaAPI Response: ${JSON.stringify(apiResponse.data)}`);
-        
-        if (!apiResponse.data || apiResponse.status !== 200) {
-          throw new BadRequestException(`Account verification failed: ${apiResponse.data?.message || 'Unknown error'}`);
-        }
-        
-        // Extract the account name from the response
-        let accountName: string | null = null;
-        
-        if (apiResponse.data.data?.account_name) {
-          accountName = apiResponse.data.data.account_name;
-        } else if (apiResponse.data.account_name) {
-          accountName = apiResponse.data.account_name;
-        } else if (typeof apiResponse.data === 'object' && Object.keys(apiResponse.data).length > 0) {
-          // Try to find any key that might contain account name
-          for (const [key, value] of Object.entries(apiResponse.data)) {
-            if (typeof value === 'string' && key.toLowerCase().includes('name')) {
-              accountName = value;
-              break;
-            } else if (typeof value === 'object' && value !== null) {
-              for (const [subKey, subValue] of Object.entries(value as object)) {
-                if (typeof subValue === 'string' && subKey.toLowerCase().includes('name')) {
-                  accountName = subValue;
-                  break;
-                }
-              }
-            }
-          }
-        }
-        
-        if (!accountName) {
-          this.logger.warn(`Could not parse account name from response: ${JSON.stringify(apiResponse.data)}`);
-          throw new BadRequestException('Could not retrieve account name from bank. Please check your account number is correct.');
-        }
-        
-        // Return only the essential information
-        return {
-          bank: {
-            name: bankName,
-            code: bankCode
-          },
-          account: {
-            number: verifyBankDto.accountNumber,
-            name: accountName
-          }
-        };
-      } catch (error) {
-        this.logger.error(`Error verifying account: ${error.message}`, error.stack);
-        
-        // Log full error details including response data if available
-        if (error.response) {
-          this.logger.error(`NubaAPI Error Details: ${JSON.stringify({
-            status: error.response.status,
-            statusText: error.response.statusText,
-            data: error.response.data
-          })}`);
-        }
-        
-        throw new BadRequestException(`Account verification failed: ${error.message}`);
-      }
-    } catch (error) {
-      this.logger.error(`Error with bank account verification: ${error.message}`, error.stack);
-      if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof InternalServerErrorException) {
-        throw error;
-      }
-      throw new BadRequestException(`Bank account verification failed: ${error.message}`);
-    }
-  }
-
-  /**
-   * Validates that a business exists and belongs to the specified owner
-   * @param id Business ID to validate
-   * @param ownerId Owner ID to validate
-   * @returns The validated business entity
-   * @throws NotFoundException if the business doesn't exist
+   * Validates and retrieves a business by ID and owner ID
    */
   private async validateAndGetBusiness(id: string, ownerId: string): Promise<Business> {
-    // Create where clause based on whether ownerId is provided
-    const whereClause: any = { id };
-    if (ownerId) {
-      whereClause.ownerId = ownerId;
-    }
-    
-    // Find the business with all necessary relations
     const business = await this.businessRepository.findOne({
-      where: whereClause,
-      relations: ['category'],
+      where: { id, ownerId },
+      relations: ['category', 'bankDetails'],
     });
 
-    // Variable to store the saved business
-    let savedBusiness: Business;
-
     if (!business) {
-      this.logger.warn(`Business with ID ${id} not found${ownerId ? ` for owner ${ownerId}` : ''}`);
       throw new NotFoundException(`Business with ID ${id} not found`);
     }
-    
+
     return business;
   }
 
   /**
-   * Generate a wallet for a business that has completed onboarding
-   * @param businessId ID of the business
-   * @returns Result of wallet generation
+   * Converts a business entity to a simplified response DTO
+   */
+  private toSimplifiedResponse(business: Business): SimplifiedBusinessResponseDto {
+    const response = new SimplifiedBusinessResponseDto();
+    response.Business_id = business.id;
+    response.name = business.name;
+    response.phoneNumber = business.phoneNumber;
+    response.onboardingStep = business.onboardingStep;
+    response.business_status = business.isActive ? 'ACTIVE' : 'INACTIVE';
+    response.user_Id = business.ownerId;
+    response.createdAt = business.createdAt;
+    response.updatedAt = business.updatedAt;
+
+    if (business.category) {
+      response.category = business.category;
+    }
+
+    if (business.bankDetails) {
+      response.bankDetails = {
+        bankCode: business.bankDetails.bankCode,
+        bankName: business.bankDetails.bankName,
+        accountNumber: business.bankDetails.accountNumber,
+        accountName: business.bankDetails.accountName,
+        accountType: business.bankDetails.accountType,
+        createdAt: business.bankDetails.createdAt,
+        updatedAt: business.bankDetails.updatedAt
+      };
+    }
+
+    const walletDetails = this.getWalletDetails(business);
+    if (walletDetails) {
+      response.walletDetails = walletDetails;
+    }
+
+    return response;
+  }
+
+  /**
+   * Generates a wallet for a business
+   * @param businessId - ID of the business to generate wallet for
+   * @returns Promise with the result of wallet generation
    */
   private async generateWalletForBusiness(businessId: string): Promise<any> {
     try {
-      // Check if business is ready for wallet generation
-      const isReady = await this.walletService.isBusinessReadyForWallet(businessId);
-      
-      if (!isReady) {
-        this.logger.warn(`Business ${businessId} is not ready for wallet generation.`);
-        return null;
-      }
-      
-      // Generate wallet address for the business
       this.logger.log(`Generating wallet for business ${businessId}`);
       const result = await this.walletService.generateWalletForCompletedBusiness(businessId);
       
-      // Log success
+      if (result && result.data) {
       this.logger.log(`Successfully generated wallet for business ${businessId}`);
-      
-      // After wallet generation, fetch the business again to get the updated wallet info
-      const updatedBusiness = await this.businessRepository.findOne({
-        where: { id: businessId }
-      });
-      
-      // Verify the wallet address was properly saved
-      if (!updatedBusiness || !updatedBusiness.walletAddress || !updatedBusiness.addressId) {
-        this.logger.warn(`Business ${businessId} wallet address not properly saved after generation.`);
-        
-        // If the wallet address is in the result but not saved to the business, try to save it manually
-        if (result?.data?.address && result?.data?.id) {
-          this.logger.log(`Attempting to manually save wallet address ${result.data.address} to business ${businessId}`);
-          try {
-            await this.businessRepository.update(
-              { id: businessId },
-              { 
-                walletAddress: result.data.address,
-                addressId: result.data.id 
-              }
-            );
-            
-            // Verify the update was successful
-            const reCheckedBusiness = await this.businessRepository.findOne({
-              where: { id: businessId }
-            });
-            
-            if (reCheckedBusiness?.walletAddress) {
-              this.logger.log(`Successfully manually saved wallet address to business ${businessId}`);
             } else {
-              this.logger.error(`Failed to manually save wallet address to business ${businessId}`);
-            }
-          } catch (saveError) {
-            this.logger.error(`Error manually saving wallet address: ${saveError.message}`, saveError.stack);
-          }
-        }
-      } else {
-        this.logger.log(`Wallet address ${updatedBusiness.walletAddress} confirmed for business ${businessId}`);
+        this.logger.warn(`Wallet generation initiated for business ${businessId} but no data returned`);
       }
       
       return result;
     } catch (error) {
-      // Log error but don't re-throw as this method is called in background processes
-      this.logger.error(`Error generating wallet for business ${businessId}: ${error.message}`, error.stack);
-      return null;
+      this.logger.error(`Failed to generate wallet for business ${businessId}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
   /**
-   * Maps a business entity to a wallet details DTO
-   * @param business - Business entity to map
-   * @returns WalletDetailsDto with business wallet information
+   * Verify bank account details with Nubapi
+   * @param verifyData Bank account verification data
+   * @returns Verification response
    */
-  private mapToWalletDetails(business: Business): WalletDetailsDto {
-    const walletDetails = new WalletDetailsDto();
-    
-    // Set the required fields in our updated WalletDetailsDto
-    walletDetails.addressId = business.addressId || '';
-    walletDetails.address = business.walletAddress;
-    
-    // Set network and other properties with default values
-    walletDetails.network = 'mainnet'; 
-    walletDetails.isEvmCompatible = true;
-    
-    // Add minimal metadata
-    walletDetails.metadata = {
-      business_id: business.id,
-      user_id: business.ownerId
-    };
-    
-    return walletDetails;
+  async verifyBankAccount(verifyData: VerifyBankDto): Promise<NubapiResponse['data']> {
+    try {
+      this.logger.log(`Verifying bank account: ${JSON.stringify(verifyData)}`);
+      
+      const nubapiToken = this.configService.get('NUBAPI_TOKEN');
+      if (!nubapiToken) {
+        throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
+      }
+
+      const verifyUrl = `https://nubapi.com/api/verify?account_number=${verifyData.accountNumber}&bank_code=${verifyData.bankCode}`;
+
+      const response = await lastValueFrom(
+        this.httpClient.get<NubapiResponse>(verifyUrl, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${nubapiToken}`
+          },
+          timeout: 10000
+        }).pipe(retryWithBackoff(3, 1000))
+      ) as NubapiResponse;
+
+      return response.data || { account_name: response.account_name };
+    } catch (error) {
+      this.logger.error(`Failed to verify bank account: ${error.message}`, error.stack);
+      if (error.response?.status === 404) {
+        throw new BadRequestException('Bank account not found');
+      }
+      throw new BadRequestException(`Failed to verify bank account: ${error.message}`);
+    }
   }
 } 

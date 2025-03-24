@@ -1,9 +1,11 @@
 import { IsNotEmpty, IsString, Length, IsOptional, ValidateIf } from 'class-validator';
+import { BaseBankDto } from './base-bank.dto';
 
 /**
  * DTO for verifying a bank account without linking it to a business
+ * Extends BaseBankDto for common bank validation
  */
-export class VerifyBankDto {
+export class VerifyBankDto extends BaseBankDto {
   /**
    * Bank code from Nigerian banks
    * Either bankCode or bankName must be provided, but not both

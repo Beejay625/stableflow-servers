@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
-import { Observable, throwError } from 'rxjs';
-import { delay, mergeMap, retry } from 'rxjs/operators';
+import { Observable, throwError, timer } from 'rxjs';
+import { delay, mergeMap, retryWhen } from 'rxjs/operators';
 import { HttpErrorException } from '../exceptions/http-error.exception';
 import axios, { AxiosError } from 'axios';
 
@@ -37,37 +37,27 @@ export const handleAxiosError = (error: any, customMessage?: string): never => {
 };
 
 /**
- * RxJS operator to retry a failed request with exponential backoff
- * @param maxRetries - Maximum number of retry attempts
- * @param initialDelayMs - Initial delay in milliseconds before the first retry
+ * Retries an observable operation with exponential backoff
+ * @param maxRetries Maximum number of retries
+ * @param initialRetryDelay Initial delay in milliseconds
+ * @returns Observable operator that retries with backoff
  */
-export const retryWithBackoff = (
-  maxRetries = 3,
-  initialDelayMs = 1000
-) => {
+export function retryWithBackoff(maxRetries = 3, initialRetryDelay = 1000) {
   let retries = 0;
 
-  return (source: Observable<any>) =>
-    source.pipe(
-      retry({
-        count: maxRetries,
-        delay: (error) => {
-          if (retries >= maxRetries) {
-            return throwError(() => error);
-          }
-
-          // Calculate backoff delay
-          const backoffDelay = initialDelayMs * Math.pow(2, retries);
-          retries++;
-          
-          return throwError(() => error).pipe(
-            delay(backoffDelay),
-            mergeMap(() => {
-              // Continue retry
-              return throwError(() => error);
-            })
-          );
-        },
+  return retryWhen(errors =>
+    errors.pipe(
+      mergeMap(error => {
+        if (retries >= maxRetries) {
+          return throwError(() => error);
+        }
+        
+        retries++;
+        const retryDelay = initialRetryDelay * Math.pow(2, retries - 1);
+        console.log(`Retrying after ${retryDelay}ms`);
+        
+        return timer(retryDelay);
       })
-    );
-}; 
+    )
+  );
+} 

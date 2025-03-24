@@ -1,13 +1,4 @@
-export enum TransactionStatus {
-  PENDING = 'pending',
-  PROCESSING = 'processing',
-  COMPLETED = 'completed',
-  STALLED = 'stalled',
-  FAILED = 'failed',
-  REFUNDED = 'refunded',
-  EXPIRED = 'expired',
-}
-
+import { TransactionStatus } from '../../wallet/constants/status.enum';
 export interface Transaction {
   id: string;
   senderAddress: string;

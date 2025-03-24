@@ -18,6 +18,7 @@ describe('BusinessResponseDto', () => {
         description: 'Category description',
         isCustom: true,
         isActive: true,
+        ownerId: 'e3dc6448-cf26-414a-ba2c-1cf5a6b507d6',
         businesses: [],
         createdAt: timestamp,
         updatedAt: timestamp
@@ -120,6 +121,7 @@ describe('BusinessResponseDto', () => {
         description: 'Category description',
         isCustom: true,
         isActive: true,
+        ownerId: 'e3dc6448-cf26-414a-ba2c-1cf5a6b507d6',
         businesses: [],
         createdAt: new Date(timestamp),
         updatedAt: new Date(timestamp)

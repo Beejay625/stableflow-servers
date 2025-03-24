@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { OfframpService } from './offramp.service';
+import { PrepareTransactionService } from './preparetransaction.service';
 import { Transaction } from '../wallet/entities/transaction.entity';
 import { Business } from '../business/entities/business.entity';
 
@@ -10,7 +11,13 @@ import { Business } from '../business/entities/business.entity';
     ConfigModule,
     TypeOrmModule.forFeature([Transaction, Business])
   ],
-  providers: [OfframpService],
-  exports: [OfframpService]
+  providers: [
+    OfframpService,
+    PrepareTransactionService
+  ],
+  exports: [
+    OfframpService,
+    PrepareTransactionService
+  ]
 })
 export class OfframpModule {} 

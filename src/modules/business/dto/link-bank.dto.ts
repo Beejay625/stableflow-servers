@@ -1,56 +1,26 @@
-import { IsNotEmpty, IsString, IsOptional, Length, IsEnum, ValidateIf } from 'class-validator';
-import { AccountType } from '../entities/business.entity';
+import { IsNotEmpty, IsString, IsOptional, IsEnum } from 'class-validator';
+import { AccountType } from '../entities/bank-details.entity';
 import { ApiProperty } from '@nestjs/swagger';
+import { BaseBankDto } from './base-bank.dto';
 
 /**
  * DTO for linking a bank account to a business
+ * Extends BaseBankDto for common bank validation
  */
-export class LinkBankDto {
-  /**
-   * Bank code from Nigerian banks
-   * Either bankCode or bankName must be provided
-   */
-  @ValidateIf(o => !o.bankName)
-  @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
-  @IsString()
-  @Length(2, 20)
-  @ApiProperty({ description: 'Bank code', required: false })
-  bankCode?: string;
-
-  /**
-   * Bank name from Nigerian banks
-   * Either bankCode or bankName must be provided
-   */
-  @ValidateIf(o => !o.bankCode)
-  @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
-  @IsString()
-  @Length(2, 100)
-  @ApiProperty({ description: 'Bank name', required: false })
-  bankName?: string;
-
-  /**
-   * Account number at the selected bank
-   */
-  @IsNotEmpty()
-  @IsString()
-  @Length(5, 20)
-  @ApiProperty({ description: 'Account number', required: true })
-  accountNumber: string;
-
+export class LinkBankDto extends BaseBankDto {
   /**
    * Optional account name (will be fetched from API if not provided)
    * Required if API can't resolve the account name
    */
   @IsOptional()
   @IsString()
-  @Length(2, 100)
   accountName?: string;
 
   /**
-   * Type of account (e.g., POS, SETTLEMENT)
+   * Type of account (e.g., POS, SAVINGS, CURRENT)
    */
   @IsNotEmpty()
   @IsEnum(AccountType)
-  @ApiProperty({ description: 'Account type', required: true })
+  @ApiProperty({ description: 'Account type', enum: AccountType, required: true })
   accountType: AccountType;
 }

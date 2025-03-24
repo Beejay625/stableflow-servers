@@ -28,6 +28,9 @@ export class Category {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ nullable: true })
+  ownerId: string;
+
   @OneToMany(type => Business, business => business.category)
   businesses: Business[];
 

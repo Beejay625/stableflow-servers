@@ -29,8 +29,7 @@ import {
   ApiProperty
 } from '@nestjs/swagger';
 import { BusinessService } from './business.service';
-import { CreateBusinessDto } from './dto/create-business.dto';
-import { UpdateBusinessDto } from './dto/update-business.dto';
+import { BusinessDto } from './dto/update-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';
 import { Business } from './entities/business.entity';
@@ -362,7 +361,7 @@ export class BusinessController {
     this.logger.debug(`Updating business ${id} for user ${ownerId}`);
     
     // Construct the update object from query parameters
-    const updateData = new UpdateBusinessDto();
+    const updateData = new BusinessDto();
     if (name !== undefined) updateData.name = name;
     if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
     if (categoryId !== undefined) updateData.categoryId = categoryId;
@@ -383,13 +382,13 @@ export class BusinessController {
   })
   @ApiQuery({ 
     name: 'bankCode', 
-    description: 'Bank code', 
+    description: 'Bank code (do not provide if using bankName)', 
     required: false,
     example: '057'
   })
   @ApiQuery({ 
     name: 'bankName', 
-    description: 'Bank name (used if bankCode is not provided)', 
+    description: 'Bank name (do not provide if using bankCode)', 
     required: false,
     example: 'Zenith Bank'
   })
@@ -453,8 +452,13 @@ export class BusinessController {
     @Query('accountType') accountType?: string,
     @Req() req?: any
   ) {
+    // Validate that only one of bankCode or bankName is provided
+    if (bankCode && bankName) {
+      throw new BadRequestException('Please provide either bankCode or bankName, not both');
+    }
+
     if (!bankCode && !bankName) {
-      throw new BadRequestException('Either bankCode or bankName must be provided');
+      throw new BadRequestException('Please provide either bankCode or bankName');
     }
 
     if (!accountNumber) {

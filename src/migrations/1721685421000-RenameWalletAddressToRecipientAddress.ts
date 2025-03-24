@@ -7,20 +7,24 @@ export class RenameWalletAddressToRecipientAddress1721685421000 implements Migra
         // Add new column
         await queryRunner.query(`ALTER TABLE "transactions" ADD "recipientAddress" character varying DEFAULT 'unknown'`);
         
-        // Copy data from old column to new column
-        await queryRunner.query(`UPDATE "transactions" SET "recipientAddress" = "walletAddress"`);
+        // Check if old column exists before copying data
+        const hasWalletAddress = await queryRunner.hasColumn('transactions', 'walletAddress');
+        if (hasWalletAddress) {
+            // Copy data from old column to new column
+            await queryRunner.query(`UPDATE "transactions" SET "recipientAddress" = "walletAddress"`);
+            
+            // Drop old column
+            await queryRunner.query(`ALTER TABLE "transactions" DROP COLUMN "walletAddress"`);
+        }
         
         // Make the new column not null
         await queryRunner.query(`ALTER TABLE "transactions" ALTER COLUMN "recipientAddress" SET NOT NULL`);
         
-        // Drop the old index
+        // Drop the old index if it exists
         await queryRunner.query(`DROP INDEX IF EXISTS "IDX_4c0dfa8d3f69951987f75fa583"`);
         
         // Create new index
         await queryRunner.query(`CREATE INDEX "IDX_transactions_recipient_address" ON "transactions" ("recipientAddress")`);
-        
-        // Drop old column
-        await queryRunner.query(`ALTER TABLE "transactions" DROP COLUMN "walletAddress"`);
     }
 
     public async down(queryRunner: QueryRunner): Promise<void> {

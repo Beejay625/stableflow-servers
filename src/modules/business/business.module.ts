@@ -2,8 +2,10 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { HttpModule } from '@nestjs/axios';
 import { Business } from './entities/business.entity';
 import { Category } from './entities/category.entity';
+import { BankDetails } from './entities/bank-details.entity';
 import { BusinessService } from './business.service';
 import { BusinessController } from './business.controller';
 
@@ -12,9 +14,10 @@ import { WalletModule } from '../wallet/wallet.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Business, Category]),
+    TypeOrmModule.forFeature([Business, Category, BankDetails]),
     PaycrestModule,
     WalletModule,
+    HttpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

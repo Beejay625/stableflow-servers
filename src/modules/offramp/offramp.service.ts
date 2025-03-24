@@ -8,7 +8,8 @@ import { ethers } from 'ethers';
 
 import { Transaction as WalletTransaction } from '../wallet/entities/transaction.entity';
 import { Business } from '../business/entities/business.entity';
-import { Transaction, TransactionStatus } from './interfaces/transaction.interface';
+import { Transaction } from './interfaces/transaction.interface';
+import { TransactionStatus } from '../wallet/constants/status.enum';
 import { OrderStatusResponse, PublicKeyResponse } from './interfaces/response.interface';
 import { gatewayAbi, erc20Abi } from './abis/abi';
 import { 
@@ -18,6 +19,7 @@ import {
   mapNetworkFromConfig,
   getTokenAddress
 } from './utils';
+import { PrepareTransactionService } from './preparetransaction.service';
 
 /**
  * Service responsible for handling cryptocurrency off-ramping operations.
@@ -44,7 +46,8 @@ export class OfframpService {
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
     @InjectRepository(Business)
-    private readonly businessRepository: Repository<Business>
+    private readonly businessRepository: Repository<Business>,
+    private readonly prepareTransactionService: PrepareTransactionService
   ) {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.ngnProviderId = this.configService.get<string>('NGN_PROVIDER_ID');
@@ -80,26 +83,16 @@ export class OfframpService {
    * 3. Encrypts recipient data for privacy
    * 4. Creates the order on the gateway contract
    * 
-   * Database Fields Used:
-   * - transaction.id (used as memo for tracking)
-   * - transaction.amount (token amount to offramp)
-   * - transaction.token (token symbol)
-   * - transaction.recipientDetails (bank account info)
-   * - transaction.businessWallet (wallet holding the tokens)
-   * 
-   * @param transaction - Contains token, amount, recipient, and currency details
+   * @param transactionId - The ID of the transaction to process
    * @returns Promise<string> - Transaction hash of the created order
    * @throws Error if transaction data is invalid or network unsupported
    */
-  async createOrder(transaction: Transaction): Promise<string> {
+  async createOrder(transactionId: string): Promise<string> {
     try {
-      this.logger.log(`Creating offramp order for transaction: ${transaction.id}`);
+      this.logger.log(`Creating offramp order for transaction: ${transactionId}`);
 
-      // Validate transaction data
-      if (!transaction || !transaction.token || !transaction.amount || !transaction.currency) {
-        this.logger.error(`Invalid transaction data for offramp processing: ${JSON.stringify(transaction)}`);
-        throw new Error('Invalid transaction data for offramp processing');
-      }
+      // Get prepared transaction data
+      const transaction = await this.prepareTransactionService.prepareTransactionForOfframp(transactionId);
 
       // Get the gateway address for current network
       const gatewayAddress = getGatewayAddressForNetwork(this.network);
@@ -112,7 +105,7 @@ export class OfframpService {
 
       // Step 1: Approve token spending and get transaction hash
       const approvalTx = await this.approveTokenSpending({
-        tokenAddress: getTokenAddress(this.network, transaction.token),
+        tokenAddress: transaction.tokenAddress,
         spenderAddress: gatewayAddress,
         amount: transaction.amount.toString(),
       });
@@ -144,7 +137,7 @@ export class OfframpService {
         address: gatewayAddress,
         method: 'createOrder',
         parameters: [
-          getTokenAddress(this.network, transaction.token),
+          transaction.tokenAddress,
           transaction.amount.toString(),
           encryptedRecipient,
           transaction.refundAddress
@@ -354,20 +347,34 @@ export class OfframpService {
   }
   
   /**
-   * Maps the order status from the aggregator to our internal transaction status
+   * Maps payment order status from webhook to internal transaction status
+   * Flow:
+   * 1. UNSETTLED -> PROCESSING (when worker picks up)
+   * 2. PROCESSING -> SETTLED (when payment completed)
+   * 3. PROCESSING -> STALLED (when expired, temporary)
+   * 4. STALLED -> REFUNDED (when refund completes)
    */
   mapOrderStatusToTransactionStatus(orderStatus: string): TransactionStatus {
     switch (orderStatus.toLowerCase()) {
-      case 'created':
       case 'pending':
-        return TransactionStatus.PROCESSING;//TODO: then update this to pending in the database
-      case 'completed':
+        // Order is being processed, contract write in progress
+        return TransactionStatus.PROCESSING;
+      
       case 'settled':
-        return TransactionStatus.COMPLETED;//TODO: then update this to completed in the database
-      case 'failed':
+        // Fiat sent successfully and contract written
+        return TransactionStatus.SETTLED;
+      
       case 'expired':
+        // Payment window expired, will trigger refund
         return TransactionStatus.STALLED;
+      
+      case 'refunded':
+        // Refund completed after expiry
+        return TransactionStatus.REFUNDED;
+      
       default:
+        // For any unknown status, keep as processing for safety
+        this.logger.warn(`Unknown order status received: ${orderStatus}`);
         return TransactionStatus.PROCESSING;
     }
   }
@@ -382,7 +389,7 @@ export class OfframpService {
   }> {
     try {
       // Step 1: Create the order
-      const txHash = await this.createOrder(transaction);
+      const txHash = await this.createOrder(transaction.id);
       
       // Step 2: Wait a short time for transaction to be recognized
       await new Promise(resolve => setTimeout(resolve, 5000));

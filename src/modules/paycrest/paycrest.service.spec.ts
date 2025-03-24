@@ -1,20 +1,21 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PaycrestService } from './paycrest.service';
 import { ConfigService } from '@nestjs/config';
-import { HttpModule } from '@nestjs/axios';
+import { HttpModule, HttpService } from '@nestjs/axios';
 import { AxiosResponse } from 'axios';
 import { of } from 'rxjs';
-import { HttpErrorException } from '../../common/exceptions/http-error.exception';
 import { API_PATHS } from './constants';
+import { Institution } from './interfaces';
 
 describe('PaycrestService', () => {
   let service: PaycrestService;
   let configService: ConfigService;
+  let httpService: HttpService;
 
   const mockConfigService = {
     get: jest.fn().mockImplementation((key) => {
-      if (key === 'paycrest.apiKey') return '208a4aef-1320-4222-82b4-e3bca8781b4b';
-      if (key === 'paycrest.baseUrl') return 'https://api.paycrest.io';
+      if (key === 'PAYCREST_API_KEY') return '208a4aef-1320-4222-82b4-e3bca8781b4b';
+      if (key === 'PAYCREST_API_URL') return 'https://api.paycrest.io';
       return undefined;
     }),
   };
@@ -33,6 +34,7 @@ describe('PaycrestService', () => {
 
     service = module.get<PaycrestService>(PaycrestService);
     configService = module.get<ConfigService>(ConfigService);
+    httpService = module.get<HttpService>(HttpService);
   });
 
   it('should be defined', () => {
@@ -41,145 +43,219 @@ describe('PaycrestService', () => {
 
   describe('constructor', () => {
     it('should set headers with API key from config', () => {
-      expect(mockConfigService.get).toHaveBeenCalledWith('paycrest.apiKey');
-      expect((service as any).headers).toHaveProperty('API-Key', '208a4aef-1320-4222-82b4-e3bca8781b4b');
+      expect(mockConfigService.get).toHaveBeenCalledWith('PAYCREST_API_KEY');
+      expect((service as any).headers).toHaveProperty('Authorization', 'Bearer 208a4aef-1320-4222-82b4-e3bca8781b4b');
       expect((service as any).headers).toHaveProperty('Content-Type', 'application/json');
     });
-  });
 
-  describe('verifyAccount', () => {
-    it('should verify an account successfully', async () => {
-      // Given
-      const verifyAccountRequest = {
-        institution: 'FBNINGLA',
-        accountIdentifier: '123456789',
-      };
-
-      const mockResponse = {
-        data: {
-          message: 'Account name was fetched successfully',
-          status: 'success',
-          data: 'John Doe',
-        },
-      };
-
-      // Mock the HTTP client
-      (service as any).httpClient.post = jest.fn().mockResolvedValue(mockResponse);
-
-      // When
-      const result = await service.verifyAccount(verifyAccountRequest);
-
-      // Then
-      expect(result).toEqual(mockResponse.data);
-      expect((service as any).httpClient.post).toHaveBeenCalledWith(
-        API_PATHS.VERIFY_ACCOUNT,
-        verifyAccountRequest,
-      );
-    });
-
-    it('should handle API errors', async () => {
-      // Given
-      const verifyAccountRequest = {
-        institution: 'INVALID',
-        accountIdentifier: '123456789',
-      };
-
-      // Mock the HTTP client to throw an error
-      (service as any).httpClient.post = jest.fn().mockRejectedValue(
-        new HttpErrorException('Institution not found', 404, 'NOT_FOUND'),
-      );
-
-      // When/Then
-      await expect(service.verifyAccount(verifyAccountRequest)).rejects.toThrow(
-        HttpErrorException,
-      );
+    it('should throw error if API key is not configured', () => {
+      mockConfigService.get.mockReturnValueOnce(undefined);
+      expect(() => new PaycrestService(configService, httpService)).toThrow('PAYCREST_API_KEY is not configured');
     });
   });
 
-  describe('getSupportedInstitutions', () => {
-    it('should return supported institutions successfully', async () => {
+  describe('getInstitutions', () => {
+    it('should return institutions for a specific currency', async () => {
       // Given
-      const mockResponse = {
+      const currencyCode = 'NGN';
+      const mockInstitutions: Institution[] = [
+        { name: 'First Bank', code: 'FBNINGLA', type: 'bank' },
+        { name: 'GT Bank', code: 'GTBINGLA', type: 'bank' }
+      ];
+
+      const mockResponse: AxiosResponse = {
         data: {
           message: 'Institutions fetched successfully',
           status: 'success',
-          data: [
-            { name: 'First Bank', code: 'FBNINGLA', type: 'bank' },
-            { name: 'GT Bank', code: 'GTBINGLA', type: 'bank' },
-          ],
+          data: mockInstitutions
         },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
       };
 
-      // Mock the HTTP client
-      (service as any).httpClient.get = jest.fn().mockResolvedValue(mockResponse);
+      jest.spyOn(httpService, 'get').mockReturnValueOnce(of(mockResponse));
 
       // When
-      const result = await service.getSupportedInstitutions();
+      const result = await service.getInstitutions(currencyCode);
 
       // Then
-      expect(result).toEqual(mockResponse.data);
-      expect((service as any).httpClient.get).toHaveBeenCalledWith(API_PATHS.INSTITUTIONS);
+      expect(result).toEqual(mockInstitutions.map(institution => ({
+        ...institution,
+        supportedCurrencies: [currencyCode]
+      })));
+      expect(httpService.get).toHaveBeenCalledWith(
+        `${API_PATHS.INSTITUTIONS}/${currencyCode}`,
+        expect.any(Object)
+      );
     });
-  });
 
-  describe('getSupportedCurrencies', () => {
-    it('should return supported currencies successfully', async () => {
+    it('should return empty array when no institutions found', async () => {
       // Given
-      const mockResponse = {
+      const currencyCode = 'NGN';
+      const mockResponse: AxiosResponse = {
         data: {
-          message: 'Currencies fetched successfully',
+          message: 'No institutions found',
           status: 'success',
-          data: [
-            { code: 'NGN', name: 'Nigerian Naira', symbol: '₦' },
-            { code: 'USD', name: 'US Dollar', symbol: '$' },
-          ],
+          data: null
         },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
       };
 
-      // Mock the HTTP client
-      (service as any).httpClient.get = jest.fn().mockResolvedValue(mockResponse);
+      jest.spyOn(httpService, 'get').mockReturnValueOnce(of(mockResponse));
 
       // When
-      const result = await service.getSupportedCurrencies();
+      const result = await service.getInstitutions(currencyCode);
 
       // Then
-      expect(result).toEqual(mockResponse.data);
-      expect((service as any).httpClient.get).toHaveBeenCalledWith(API_PATHS.CURRENCIES);
+      expect(result).toEqual([]);
+    });
+
+    it('should default to NGN when no currency code provided', async () => {
+      // Given
+      const mockInstitutions: Institution[] = [
+        { name: 'First Bank', code: 'FBNINGLA', type: 'bank' }
+      ];
+
+      const mockResponse: AxiosResponse = {
+        data: {
+          message: 'Institutions fetched successfully',
+          status: 'success',
+          data: mockInstitutions
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
+      };
+
+      jest.spyOn(httpService, 'get').mockReturnValueOnce(of(mockResponse));
+
+      // When
+      const result = await service.getInstitutions();
+
+      // Then
+      expect(httpService.get).toHaveBeenCalledWith(
+        `${API_PATHS.INSTITUTIONS}/NGN`,
+        expect.any(Object)
+      );
+      expect(result).toEqual(mockInstitutions.map(institution => ({
+        ...institution,
+        supportedCurrencies: ['NGN']
+      })));
     });
   });
 
   describe('getExchangeRate', () => {
-    it('should return exchange rate information successfully', async () => {
+    it('should return exchange rate information', async () => {
       // Given
       const exchangeRateRequest = {
         sourceCurrency: 'NGN',
         targetCurrency: 'USD',
-        amount: 1000,
+        amount: '1000'
       };
 
-      const mockResponse = {
+      const mockResponse: AxiosResponse = {
         data: {
           message: 'Exchange rate fetched successfully',
           status: 'success',
           data: {
-            rate: 0.0022,
-            convertedAmount: 2.2,
-            fee: 0.1,
-          },
+            rate: 0.0024,
+            amount: 2.4
+          }
         },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
       };
 
-      // Mock the HTTP client
-      (service as any).httpClient.post = jest.fn().mockResolvedValue(mockResponse);
+      jest.spyOn(httpService, 'post').mockReturnValueOnce(of(mockResponse));
 
       // When
       const result = await service.getExchangeRate(exchangeRateRequest);
 
       // Then
       expect(result).toEqual(mockResponse.data);
-      expect((service as any).httpClient.post).toHaveBeenCalledWith(
+      expect(httpService.post).toHaveBeenCalledWith(
         API_PATHS.EXCHANGE_RATE,
         exchangeRateRequest,
+        expect.any(Object)
+      );
+    });
+  });
+
+  describe('getTokenRate', () => {
+    it('should return token rate information', async () => {
+      // Given
+      const token = 'USDT';
+      const amount = '1000';
+      const fiat = 'NGN';
+
+      const mockResponse: AxiosResponse = {
+        data: {
+          message: 'Token rate fetched successfully',
+          status: 'success',
+          data: {
+            rate: 750,
+            amount: 750000
+          }
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
+      };
+
+      jest.spyOn(httpService, 'get').mockReturnValueOnce(of(mockResponse));
+
+      // When
+      const result = await service.getTokenRate(token, amount, fiat);
+
+      // Then
+      expect(result).toEqual(mockResponse.data);
+      expect(httpService.get).toHaveBeenCalledWith(
+        `${API_PATHS.TOKEN_RATE}/${token}/${amount}/${fiat}`,
+        expect.any(Object)
+      );
+    });
+
+    it('should include provider ID in URL when provided', async () => {
+      // Given
+      const token = 'USDT';
+      const amount = '1000';
+      const fiat = 'NGN';
+      const providerId = 'binance';
+
+      const mockResponse: AxiosResponse = {
+        data: {
+          message: 'Token rate fetched successfully',
+          status: 'success',
+          data: {
+            rate: 750,
+            amount: 750000
+          }
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: {} as any
+      };
+
+      jest.spyOn(httpService, 'get').mockReturnValueOnce(of(mockResponse));
+
+      // When
+      const result = await service.getTokenRate(token, amount, fiat, providerId);
+
+      // Then
+      expect(result).toEqual(mockResponse.data);
+      expect(httpService.get).toHaveBeenCalledWith(
+        `${API_PATHS.TOKEN_RATE}/${token}/${amount}/${fiat}/${providerId}`,
+        expect.any(Object)
       );
     });
   });
