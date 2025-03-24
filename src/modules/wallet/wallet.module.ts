@@ -17,7 +17,7 @@ import { QueueModule } from '../queue/queue.module';
 import { WalletController } from './wallet.controller';
 import { JwtModule } from '@nestjs/jwt';
 import { ScheduleModule } from '@nestjs/schedule';
-import { OfframpService } from './services/offramp.service';
+import { OfframpService } from '../offramp/offramp.service';
 import { OfframpScheduleService } from './schedule/offramp-schedule.service';
 import { OfframpAttempt } from './entities/offramp-attempt.entity';
 import { RedisModule } from '../redis/redis.module';

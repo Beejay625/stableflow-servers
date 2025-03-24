@@ -3,15 +3,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Job } from 'bull';
 import { ConfigService } from '@nestjs/config';
 import { SortTransactionService } from '../services/sort.transaction.service';
-import { TransactionQueueService } from '../../queue/services/transaction-queue.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Transaction } from '../entities/transaction.entity';
 import { Business } from '../../business/entities/business.entity';
 import { RedlockService } from '../../redis/redlock.service';
-import { TransactionStatus } from '../constants/status.enum';
 import { MailService } from '../../../common/utils/email';
-import { Not } from 'typeorm';
 import { GetTransactionService } from '../services/gettransaction.service';
 
 /**
