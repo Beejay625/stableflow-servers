@@ -1,40 +1,51 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
+import { Logger } from '@nestjs/common';
+
+const logger = new Logger('Database');
 
 // This configuration is used by the NestJS application
-export const databaseConfig = (configService: ConfigService): TypeOrmModuleOptions => ({
-  type: 'postgres',
-  host: configService.get<string>('DB_HOST'),
-  port: configService.get<number>('DB_PORT'),
-  username: configService.get<string>('DB_USER'),
-  password: configService.get<string>('DB_PASSWORD'),
-  database: configService.get<string>('DB_NAME'),
-  autoLoadEntities: true, // Automatically load all entities registered by feature modules
-  synchronize: process.env.NODE_ENV === 'development', // ❌ Should be disabled in production
-  ssl: false, // Disabled SSL for local development
-  logging: process.env.NODE_ENV === 'development',
-  extra: {
-    // Connection pool settings
-    max: 20, // Maximum number of clients in the pool
-    idleTimeoutMillis: 30000, // How long a client is allowed to remain idle before being closed
-    connectionTimeoutMillis: 10000, // How long to wait for a connection to become available
-  },
-});
+export const databaseConfig = (configService: ConfigService): TypeOrmModuleOptions => {
+  // Use only connection string
+  const connectionString = configService.get<string>('DATABASE_URL');
+  
+  if (!connectionString) {
+    logger.error('[DATABASE CONFIG] DATABASE_URL is not defined in environment variables');
+    throw new Error('DATABASE_URL is required');
+  }
+  
+  const config: TypeOrmModuleOptions = {
+    type: 'postgres',
+    url: connectionString,
+    autoLoadEntities: true,
+    synchronize: process.env.NODE_ENV === 'development',
+    ssl: connectionString.includes('sslmode=require'),
+    logging: process.env.NODE_ENV === 'development',
+    extra: {
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    },
+  };
+  
+  // Log connection info (hiding sensitive details)
+  const sanitizedUrl = connectionString.replace(/\/\/.*@/, '//***:***@');
+  logger.log(`[DATABASE CONFIG] Connection URL: ${sanitizedUrl}`);
+  logger.log(`[DATABASE CONFIG] Connection Pool Size: ${config.extra.max}`);
+  logger.log(`[DATABASE CONFIG] Environment: ${process.env.NODE_ENV}`);
+  
+  return config;
+};
 
 // This DataSource is used for TypeORM CLI migrations and direct database access
 const dataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-  username: process.env.DB_USER || process.env.DB_USERNAME,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME || process.env.DB_DATABASE,
-  // For CLI migrations, we need to specify the entity pattern
+  url: process.env.DATABASE_URL,
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../migrations/**/*{.ts,.js}'],
   synchronize: false, // ✅ Use migrations instead of synchronize for schema changes
-  ssl: false, // Disabled SSL for local development
+  ssl: process.env.DATABASE_URL?.includes('sslmode=require'),
   logging: process.env.NODE_ENV === 'development',
   extra: {
     max: 20,

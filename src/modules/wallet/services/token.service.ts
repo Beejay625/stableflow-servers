@@ -35,11 +35,13 @@ export class TokenService {
    * 
    * @param networks Optional array of networks to filter by (e.g., 'mainnet', 'testnet')
    * @param symbols Optional array of token symbols to filter by (e.g., 'USDT', 'USDC')
+   * @param blockchains Optional array of blockchain names to filter by (e.g., 'tron', 'base')
    * @returns Promise with array of token data
    */
   async getStablecoinTokens(
     networks?: string[],
-    symbols?: string[]
+    symbols?: string[],
+    blockchains?: string[]
   ): Promise<TokenData[]> {
     const apiKey = this.configService.get<string>('blockradar.apiKey');
 
@@ -74,11 +76,16 @@ export class TokenService {
 
       // Filter for tokens on supported blockchains
       const filteredTokens = tokens.filter((token: any) => {
-        // Check if blockchain name contains any of our target chains (case insensitive)
-        const blockchainMatches = token.blockchain?.name && 
-          (token.blockchain.name.toLowerCase().includes('bnb') || 
-           token.blockchain.name.toLowerCase().includes('tron') || 
-           token.blockchain.name.toLowerCase() === 'base');
+        // Check if blockchain name matches any of our target blockchains (case insensitive)
+        const blockchainMatches = token.blockchain?.name && (
+          !blockchains || blockchains.length === 0 ? 
+            (token.blockchain.name.toLowerCase().includes('bnb') || 
+             token.blockchain.name.toLowerCase().includes('tron') || 
+             token.blockchain.name.toLowerCase() === 'base') :
+            blockchains.some(b => 
+              token.blockchain.name.toLowerCase().includes(b.toLowerCase())
+            )
+        );
           
         // Check if network matches the requested networks
         const networkMatches = token.network && effectiveNetworks.includes(token.network);
@@ -97,7 +104,11 @@ export class TokenService {
         ? symbols.join(', ') + ' tokens' 
         : 'all supported stablecoins';
         
-      this.logger.debug(`Filtered to ${filteredTokens.length} tokens (${symbolFilterText} on ${networkFilterText})`);
+      const blockchainFilterText = blockchains && blockchains.length > 0
+        ? blockchains.join(', ') + ' blockchains'
+        : 'supported blockchains';
+        
+      this.logger.debug(`Filtered to ${filteredTokens.length} tokens (${symbolFilterText} on ${blockchainFilterText} for ${networkFilterText})`);
 
       return filteredTokens.map((token: any) => ({
         tokenId: token.id,
@@ -164,5 +175,54 @@ export class TokenService {
    */
   async getUSDCTokens(networks?: string[]): Promise<TokenData[]> {
     return this.getStablecoinTokens(networks, ['USDC']);
+  }
+
+  /**
+   * Get USDT on Tron blockchain only (using the default network from env)
+   * 
+   * @param networks Optional array of networks to override default
+   * @returns Promise with array of USDT tokens on Tron
+   */
+  async getUsdtOnTron(networks?: string[]): Promise<TokenData[]> {
+    return this.getStablecoinTokens(networks, ['USDT'], ['tron']);
+  }
+
+  /**
+   * Get USDC on Base blockchain only (using the default network from env)
+   * 
+   * @param networks Optional array of networks to override default
+   * @returns Promise with array of USDC tokens on Base
+   */
+  async getUsdcOnBase(networks?: string[]): Promise<TokenData[]> {
+    return this.getStablecoinTokens(networks, ['USDC'], ['base']);
+  }
+
+  /**
+   * Get USDT on BNB Smart Chain only (using the default network from env)
+   * 
+   * @param networks Optional array of networks to override default
+   * @returns Promise with array of USDT tokens on BNB Smart Chain
+   */
+  async getUsdtOnBsc(networks?: string[]): Promise<TokenData[]> {
+    return this.getStablecoinTokens(networks, ['USDT'], ['bnb']);
+  }
+
+  /**
+   * Get all supported platform tokens (USDT on Tron, USDC on Base, USDT on BSC)
+   * using the default network from env
+   * 
+   * @param networks Optional array of networks to override default
+   * @returns Promise with array of all supported platform tokens
+   */
+  async getSupportedPlatformTokens(networks?: string[]): Promise<TokenData[]> {
+    const effectiveNetworks = networks || [this.defaultNetwork];
+    
+    const [usdtTron, usdcBase, usdtBsc] = await Promise.all([
+      this.getUsdtOnTron(effectiveNetworks),
+      this.getUsdcOnBase(effectiveNetworks),
+      this.getUsdtOnBsc(effectiveNetworks)
+    ]);
+    
+    return [...usdtTron, ...usdcBase, ...usdtBsc];
   }
 } 

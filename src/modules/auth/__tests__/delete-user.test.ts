@@ -79,14 +79,14 @@ describe('AuthService - Delete User', () => {
         name: 'Business 1',
         ownerId: userId,
         walletAddress: '0xABCDEF123',
-        walletId: 'wallet-id-1',
+        addressId: 'wallet-id-1',
       },
       {
         id: 'business-2',
         name: 'Business 2',
         ownerId: userId,
         walletAddress: null,
-        walletId: null,
+        addressId: null,
       },
     ];
     

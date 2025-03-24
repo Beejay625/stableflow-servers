@@ -89,7 +89,7 @@ describe('BusinessController', () => {
       updatedAt: new Date()
     },
     walletDetails: {
-      walletId: '12345',
+      addressId: '12345',
       address: '0x123456789',
       network: 'testnet',
       isEvmCompatible: true,
@@ -215,7 +215,7 @@ describe('BusinessController', () => {
             updatedAt: new Date()
           },
           walletDetails: {
-            walletId: '12345',
+            addressId: '12345',
             address: '0x123456789',
             network: 'testnet',
             isEvmCompatible: true,
@@ -722,7 +722,7 @@ describe('BusinessController', () => {
             updatedAt: new Date()
           },
           walletDetails: {
-            walletId: '12345',
+            addressId: '12345',
             address: '0x123456789',
             network: 'testnet',
             isEvmCompatible: true,
@@ -774,7 +774,7 @@ describe('BusinessController', () => {
           updatedAt: new Date()
         },
         walletDetails: {
-          walletId: '12345',
+          addressId: '12345',
           address: '0x123456789',
           network: 'testnet',
           isEvmCompatible: true,

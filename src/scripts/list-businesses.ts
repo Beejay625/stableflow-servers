@@ -35,7 +35,7 @@ async function listBusinesses() {
         console.log(`Name: ${business.name}`);
         console.log(`Onboarding step: ${business.onboardingStep}`);
         console.log(`Wallet address: ${business.walletAddress || 'Not set'}`);
-        console.log(`Wallet ID: ${business.walletId || 'Not set'}`);
+        console.log(`Address ID: ${business.addressId || 'Not set'}`);
         console.log(`Owner ID: ${business.ownerId}`);
         console.log(`Created at: ${business.createdAt}`);
       });

@@ -224,6 +224,12 @@ export class AuthService {
     this.logger.log(`Authentication successful for ${email} with business ID: ${businessId}`);
     this.logger.log(`Response object: ${JSON.stringify(response)}`);
     
+    if (business.walletAddress || business.addressId) {
+      console.log(`Business ${businessId} already has wallet details:
+      Wallet Address: ${business.walletAddress}
+      Address ID: ${business.addressId}`);
+    }
+    
     return response;
   }
 
@@ -256,10 +262,10 @@ export class AuthService {
       this.logger.log(`Deleting business ${business.id}`);
       
       // Log if business has wallet data
-      if (business.walletAddress || business.walletId) {
+      if (business.walletAddress || business.addressId) {
         this.logger.log(`Business ${business.id} has wallet data that will be deleted: 
           Address: ${business.walletAddress}, 
-          Wallet ID: ${business.walletId}`);
+          Address ID: ${business.addressId}`);
       }
       
       // Delete the business

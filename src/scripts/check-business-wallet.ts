@@ -37,7 +37,7 @@ async function checkBusinessWallet() {
     console.log(`Name: ${business.name}`);
     console.log(`Onboarding step: ${business.onboardingStep}`);
     console.log(`Wallet address: ${business.walletAddress || 'Not set'}`);
-    console.log(`Wallet ID: ${business.walletId || 'Not set'}`);
+    console.log(`Address ID: ${business.addressId || 'Not set'}`);
     console.log(`Bank code: ${business.bankCode || 'Not set'}`);
     console.log(`Bank name: ${business.bankName || 'Not set'}`);
     console.log(`Account number: ${business.accountNumber || 'Not set'}`);

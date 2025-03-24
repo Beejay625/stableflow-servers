@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { User } from '../../auth/entities/auth.entity';
 import { Category } from './category.entity';
+import { Transaction } from '../../wallet/entities/transaction.entity';
 
 /**
  * Constants for onboarding steps
@@ -91,7 +92,7 @@ export class Business {
 
   // Blockchain wallet ID from BlockRadar
   @Column({ nullable: true, length: 36 })
-  walletId: string;
+  addressId: string;
 
   // Category relationship using proper TypeORM way to handle circular dependencies
   @ManyToOne(type => Category, category => category.businesses, { 
@@ -123,4 +124,7 @@ export class Business {
 
   @UpdateDateColumn()
   updatedAt: Date;
+
+  @OneToMany(() => Transaction, transaction => transaction.business)
+  transactions: Transaction[];
 }

@@ -171,20 +171,20 @@ export class WalletService {
       }
       
       const walletAddress = response.data.data.address;
-      const blockradarWalletId = response.data.data.id;
+      const blockradarAddressId = response.data.data.id;
       
       if (!walletAddress) {
         throw new Error('No wallet address found in BlockRadar API response');
       }
       
-      if (!blockradarWalletId) {
-        throw new Error('No wallet ID found in BlockRadar API response');
+      if (!blockradarAddressId) {
+        throw new Error('No address ID found in BlockRadar API response');
       }
       
-      this.logger.log(`Successfully extracted wallet address ${walletAddress} and ID ${blockradarWalletId}`);
+      this.logger.log(`Successfully extracted wallet address ${walletAddress} and ID ${blockradarAddressId}`);
       
       // Save wallet address to business
-      await this.saveWalletAddressToBusiness(businessId, walletAddress, blockradarWalletId);
+      await this.saveWalletAddressToBusiness(businessId, walletAddress, blockradarAddressId);
       
       return response.data;
     } catch (error) {
@@ -202,16 +202,16 @@ export class WalletService {
    * Save wallet address to business entity
    * @param businessId - ID of the business
    * @param walletAddress - Wallet address to save
-   * @param walletId - BlockRadar wallet ID to save
+   * @param addressId - BlockRadar wallet ID to save
    * @returns Promise<void>
    */
   private async saveWalletAddressToBusiness(
     businessId: string, 
     walletAddress: string, 
-    walletId: string
+    addressId: string
   ): Promise<void> {
     this.logger.log(`Saving wallet address ${walletAddress} to business ${businessId}`);
-    console.log(`[DEBUG] Saving wallet address ${walletAddress} with ID ${walletId} to business ${businessId}`);
+    console.log(`[DEBUG] Saving wallet address ${walletAddress} with ID ${addressId} to business ${businessId}`);
     
     try {
       // Update business with wallet address
@@ -219,7 +219,7 @@ export class WalletService {
         { id: businessId },
         { 
           walletAddress,
-          walletId,
+          addressId: addressId,
         }
       );
       
@@ -232,7 +232,7 @@ export class WalletService {
       
       console.log(`[DEBUG] Business after update:`, 
         updatedBusiness ? 
-        `walletAddress: ${updatedBusiness.walletAddress}, walletId: ${updatedBusiness.walletId}` : 
+        `walletAddress: ${updatedBusiness.walletAddress}, addressId: ${updatedBusiness.addressId}` : 
         'Business not found');
         
       // Additional check to confirm wallet was saved correctly  
@@ -246,31 +246,29 @@ export class WalletService {
           await this.businessRepository
             .createQueryBuilder()
             .update('businesses') // Make sure this matches your actual table name
-            .set({ walletAddress, walletId })
+            .set({ walletAddress, addressId: addressId })
             .where("id = :id", { id: businessId })
             .execute();
             
-          // Verify the second attempt
+          console.log(`[DEBUG] Alternative update completed`);
+          
+          // Check again
           const reCheckedBusiness = await this.businessRepository.findOne({
             where: { id: businessId }
           });
           
-          console.log(`[DEBUG] Business after second update attempt:`, 
+          console.log(`[DEBUG] Business after alternative update:`, 
             reCheckedBusiness ? 
-            `walletAddress: ${reCheckedBusiness.walletAddress}, walletId: ${reCheckedBusiness.walletId}` : 
+            `walletAddress: ${reCheckedBusiness.walletAddress}, addressId: ${reCheckedBusiness.addressId}` : 
             'Business not found');
-            
-          if (!reCheckedBusiness || !reCheckedBusiness.walletAddress) {
-            console.error(`[DEBUG] Second attempt to save wallet address failed!`);
-          }
-        } catch (secondError) {
-          console.error(`[DEBUG] Error in second update attempt:`, secondError);
+        } catch (alternativeError) {
+          console.error(`[DEBUG] Alternative update failed: ${alternativeError.message}`);
+          this.logger.error(`Alternative update attempt failed: ${alternativeError.message}`);
         }
       }
     } catch (error) {
-      this.logger.error(`Error saving wallet address to business: ${error.message}`, error.stack);
-      console.error(`[DEBUG] Error saving wallet address:`, error);
-      throw error;
+      this.logger.error(`Failed to save wallet address to business: ${error.message}`, error.stack);
+      throw new InternalServerErrorException(`Failed to save wallet address to business: ${error.message}`);
     }
   }
 } 

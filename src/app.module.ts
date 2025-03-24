@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { envConfig, databaseConfig } from './config';
 import { AuthModule, RedisModule, QueueModule, PaycrestModule } from './modules';
 import { BusinessModule } from './modules/business/business.module';
+import { WalletModule } from './modules/wallet/wallet.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './common/guards';
 import { JwtModule } from '@nestjs/jwt';
@@ -24,6 +25,7 @@ import { JwtModule } from '@nestjs/jwt';
     RedisModule,
     QueueModule,
     PaycrestModule,
+    WalletModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

@@ -1,0 +1,1 @@
+{"event":"deposit.swept.success","data":{"id":"8c392ba5-253f-4148-aa8e-b58b4a265ef6","reference":"LIavMxKnyx","senderAddress":"0x0459c0bec79A74b4d8afBB8E6B6341493874Fc0F","recipientAddress":"0xA113730b79eceACe6757f80ccd185d9Ab8E98897","tokenAddress":"0x337610d27c682E347C9cD60BD4b3b107C9d34dDd","amount":"0.2","status":"SUCCESS","type":"DEPOSIT"}}

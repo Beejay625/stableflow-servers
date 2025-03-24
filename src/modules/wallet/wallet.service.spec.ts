@@ -18,50 +18,46 @@ describe('WalletService', () => {
   // Mock response from the BlockRadar API
   const mockWalletResponse = {
     data: {
+      message: "Address generated successfully",
       statusCode: 200,
-      message: "Wallet address generated successfully",
       data: {
-        message: "Address generated successfully",
-        statusCode: 200,
-        data: {
-          address: "0xf5f2817A086e747a7c45429993338070Af8f3A81",
-          name: "Test_Business_123",
-          type: "INTERNAL",
-          derivationPath: "m/44'/60'/0'/0/1",
-          metadata: {
-            business_id: "123",
-            user_id: "456"
+        address: "0xf5f2817A086e747a7c45429993338070Af8f3A81",
+        name: "Test_Business_123",
+        type: "INTERNAL",
+        derivationPath: "m/44'/60'/0'/0/1",
+        metadata: {
+          business_id: "123",
+          user_id: "456"
+        },
+        configurations: {
+          aml: {
+            provider: "ofac, fbi, tether, circle",
+            status: "success",
+            message: "Address is not sanctioned"
           },
-          configurations: {
-            aml: {
-              provider: "ofac, fbi, tether, circle",
-              status: "success",
-              message: "Address is not sanctioned"
-            },
-            showPrivateKey: false,
-            disableAutoSweep: false,
-            enableGaslessWithdraw: false
-          },
-          network: "testnet",
-          blockchain: {
-            id: "0d52d4f1-e9e7-43ca-a6db-0ace74c34da0",
-            name: "BNB smart chain",
-            symbol: "bnb",
-            slug: "bnb-smart-chain",
-            derivationPath: "m/44'/60'/0'/0",
-            isEvmCompatible: true,
-            isL2: false,
-            isActive: true,
-            tokenStandard: "BEP20",
-            createdAt: "2023-04-28T14:44:06.397Z",
-            updatedAt: "2024-11-26T15:26:19.665Z",
-            logoUrl: "https://res.cloudinary.com/blockradar/image/upload/v1716800080/crypto-assets/bnb-bnb-logo_e4qdyk.png"
-          },
-          id: "e70f2dfc-1827-4b34-b037-e63ae27a2d9b",
+          showPrivateKey: false,
+          disableAutoSweep: false,
+          enableGaslessWithdraw: false
+        },
+        network: "testnet",
+        blockchain: {
+          id: "0d52d4f1-e9e7-43ca-a6db-0ace74c34da0",
+          name: "BNB smart chain",
+          symbol: "bnb",
+          slug: "bnb-smart-chain",
+          derivationPath: "m/44'/60'/0'/0",
+          isEvmCompatible: true,
+          isL2: false,
           isActive: true,
-          createdAt: "2025-03-18T13:17:29.481Z",
-          updatedAt: "2025-03-18T13:17:29.481Z"
-        }
+          tokenStandard: "BEP20",
+          createdAt: "2023-04-28T14:44:06.397Z",
+          updatedAt: "2024-11-26T15:26:19.665Z",
+          logoUrl: "https://res.cloudinary.com/blockradar/image/upload/v1716800080/crypto-assets/bnb-bnb-logo_e4qdyk.png"
+        },
+        id: "e70f2dfc-1827-4b34-b037-e63ae27a2d9b",
+        isActive: true,
+        createdAt: "2025-03-18T13:17:29.481Z",
+        updatedAt: "2025-03-18T13:17:29.481Z"
       }
     }
   };
@@ -346,7 +342,7 @@ describe('WalletService', () => {
         { id: businessId },
         { 
           walletAddress: "0xf5f2817A086e747a7c45429993338070Af8f3A81",
-          walletId: "e70f2dfc-1827-4b34-b037-e63ae27a2d9b",
+          addressId: "e70f2dfc-1827-4b34-b037-e63ae27a2d9b",
         }
       );
       

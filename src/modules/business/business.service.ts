@@ -147,17 +147,17 @@ export class BusinessService {
    */
   private getWalletDetails(business: Business): WalletDetailsDto | null {
     console.log(`[DEBUG] Getting wallet details for business ${business.id}: ` + 
-      `walletAddress: ${business.walletAddress || 'none'}, walletId: ${business.walletId || 'none'}`);
+      `walletAddress: ${business.walletAddress || 'none'}, addressId: ${business.addressId || 'none'}`);
     
     // If either wallet address or ID is missing, return null
-    if (!business.walletAddress || !business.walletId) {
+    if (!business.walletAddress || !business.addressId) {
       console.log(`[DEBUG] No wallet details available, returning null`);
       return null;
     }
     
     // Create a wallet details object with the available information
     const walletDetails = new WalletDetailsDto();
-    walletDetails.walletId = business.walletId;
+    walletDetails.addressId = business.addressId;
     walletDetails.address = business.walletAddress;
     
     // Since we don't have blockchain network details in the business entity,
@@ -561,13 +561,13 @@ export class BusinessService {
               
               console.log(`[DEBUG] Business after wallet generation:`, 
                 businessWithWallet ? 
-                `walletAddress: ${businessWithWallet.walletAddress}, walletId: ${businessWithWallet.walletId}` : 
+                `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
                 'Business not found');
               
               if (businessWithWallet) {
                 savedBusiness = businessWithWallet;
                 console.log(`[DEBUG] Updated savedBusiness with wallet info:`, 
-                  `walletAddress: ${savedBusiness.walletAddress}, walletId: ${savedBusiness.walletId}`);
+                  `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
               }
               
               this.logger.log(`Wallet address generated for business ${savedBusiness.id}`);
@@ -598,11 +598,11 @@ export class BusinessService {
         businessResponse.data = this.toSimplifiedResponse(savedBusiness);
         
         // If business has a wallet address after all operations, make sure it's included in the response
-        if (savedBusiness.walletAddress && savedBusiness.walletId) {
+        if (savedBusiness.walletAddress && savedBusiness.addressId) {
           if (!businessResponse.data.walletDetails) {
             // Create wallet details if they don't exist in the response
             businessResponse.data.walletDetails = {
-              walletId: savedBusiness.walletId,
+              addressId: savedBusiness.addressId,
               address: savedBusiness.walletAddress,
               network: 'mainnet',
               isEvmCompatible: true,
@@ -665,13 +665,13 @@ export class BusinessService {
                 
                 console.log(`[DEBUG] Business after wallet generation (fallback):`, 
                   businessWithWallet ? 
-                  `walletAddress: ${businessWithWallet.walletAddress}, walletId: ${businessWithWallet.walletId}` : 
+                  `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
                   'Business not found');
                 
                 if (businessWithWallet) {
                   savedBusiness = businessWithWallet;
                   console.log(`[DEBUG] Updated savedBusiness with wallet info (fallback):`, 
-                    `walletAddress: ${savedBusiness.walletAddress}, walletId: ${savedBusiness.walletId}`);
+                    `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
                 }
                 
                 this.logger.log(`Wallet address ${walletGenerationResult.data.data.address} generated for business ${savedBusiness.id}`);
@@ -695,7 +695,7 @@ export class BusinessService {
           // If wallet was generated, add wallet details to the response
           if (walletGenerationResult && walletGenerationResult.data) {
             businessResponse.data.walletDetails = {
-              walletId: savedBusiness.walletId,
+              addressId: savedBusiness.addressId,
               address: savedBusiness.walletAddress,
               network: 'mainnet',
               isEvmCompatible: true,
@@ -774,13 +774,13 @@ export class BusinessService {
           
           console.log(`[DEBUG] Business after wallet generation:`, 
             businessWithWallet ? 
-            `walletAddress: ${businessWithWallet.walletAddress}, walletId: ${businessWithWallet.walletId}` : 
+            `walletAddress: ${businessWithWallet.walletAddress}, addressId: ${businessWithWallet.addressId}` : 
             'Business not found');
           
           if (businessWithWallet) {
             savedBusiness = businessWithWallet;
             console.log(`[DEBUG] Updated savedBusiness with wallet info:`, 
-              `walletAddress: ${savedBusiness.walletAddress}, walletId: ${savedBusiness.walletId}`);
+              `walletAddress: ${savedBusiness.walletAddress}, addressId: ${savedBusiness.addressId}`);
           }
           
           this.logger.log(`Wallet address generated for business ${savedBusiness.id}`);
@@ -802,7 +802,7 @@ export class BusinessService {
     // If wallet was generated, add wallet details to the response
     if (walletGenerationResult && walletGenerationResult.data) {
       businessResponse.data.walletDetails = {
-        walletId: savedBusiness.walletId,
+        addressId: savedBusiness.addressId,
         address: savedBusiness.walletAddress,
         network: 'mainnet',
         isEvmCompatible: true,
@@ -1442,7 +1442,7 @@ export class BusinessService {
       });
       
       // Verify the wallet address was properly saved
-      if (!updatedBusiness || !updatedBusiness.walletAddress || !updatedBusiness.walletId) {
+      if (!updatedBusiness || !updatedBusiness.walletAddress || !updatedBusiness.addressId) {
         this.logger.warn(`Business ${businessId} wallet address not properly saved after generation.`);
         
         // If the wallet address is in the result but not saved to the business, try to save it manually
@@ -1453,7 +1453,7 @@ export class BusinessService {
               { id: businessId },
               { 
                 walletAddress: result.data.address,
-                walletId: result.data.id 
+                addressId: result.data.id 
               }
             );
             
@@ -1492,7 +1492,7 @@ export class BusinessService {
     const walletDetails = new WalletDetailsDto();
     
     // Set the required fields in our updated WalletDetailsDto
-    walletDetails.walletId = business.walletId || '';
+    walletDetails.addressId = business.addressId || '';
     walletDetails.address = business.walletAddress;
     
     // Set network and other properties with default values

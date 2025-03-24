@@ -39,7 +39,7 @@ async function testWalletGeneration() {
     console.log(`Name: ${business.name}`);
     console.log(`Onboarding step: ${business.onboardingStep}`);
     console.log(`Current wallet address: ${business.walletDetails?.address || 'Not set'}`);
-    console.log(`Current wallet ID: ${business.walletDetails?.walletId || 'Not set'}`);
+    console.log(`Current address ID: ${business.walletDetails?.addressId || 'Not set'}`);
     
     if (business.walletDetails && !forceOption) {
       console.log('\nBusiness already has a wallet. Use "force" option to regenerate.');
@@ -51,7 +51,7 @@ async function testWalletGeneration() {
       console.log('\nForce option detected. Clearing existing wallet details...');
       await businessRepository.update(
         { id: businessId },
-        { walletAddress: null, walletId: null }
+        { walletAddress: null, addressId: null }
       );
       console.log('Wallet details cleared. Proceeding with new wallet generation.');
     }
@@ -78,11 +78,14 @@ async function testWalletGeneration() {
       const updatedBusinessResponse = await businessService.getBusinessById(businessId, null);
       const updatedBusiness = updatedBusinessResponse.data;
       
-      console.log('\nVerifying wallet details were saved to business:');
-      console.log(`Wallet address: ${updatedBusiness.walletDetails?.address || 'Not set'}`);
-      console.log(`Wallet ID: ${updatedBusiness.walletDetails?.walletId || 'Not set'}`);
+      console.log('\nUpdated business details after wallet generation:');
+      console.log(`ID: ${updatedBusiness.Business_id}`);
+      console.log(`Name: ${updatedBusiness.name}`);
+      console.log(`Onboarding step: ${updatedBusiness.onboardingStep}`);
+      console.log(`Current wallet address: ${updatedBusiness.walletDetails?.address || 'Not set'}`);
+      console.log(`Current address ID: ${updatedBusiness.walletDetails?.addressId || 'Not set'}`);
       
-      if (updatedBusiness.walletDetails?.address && updatedBusiness.walletDetails?.walletId) {
+      if (updatedBusiness.walletDetails?.address && updatedBusiness.walletDetails?.addressId) {
         console.log('\n✅ Wallet details successfully saved to business!');
       } else {
         console.log('\n❌ Wallet details were NOT saved to business!');

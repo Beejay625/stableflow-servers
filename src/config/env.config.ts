@@ -21,7 +21,6 @@ function loadEnvFile() {
       envFilePath = path.resolve(process.cwd(), '.env.staging');
       break;
     case 'production':
-    default:
       envFilePath = path.resolve(process.cwd(), '.env');
       break;
   }
@@ -30,14 +29,29 @@ function loadEnvFile() {
   const envFileExists = fs.existsSync(envFilePath);
 
   if (envFileExists) {
-    console.log(`Loading environment variables from ${envFilePath}`);
+    console.log(`[ENV CONFIG] Loading environment variables from ${envFilePath}`);
+    console.log(`[ENV CONFIG] NODE_ENV=${environment}`);
+    
+    // Clear any previously loaded env vars that might interfere
+    Object.keys(process.env).forEach(key => {
+      if (!['PATH', 'NODE_ENV', 'PWD', 'HOME', 'SHELL'].includes(key)) {
+        delete process.env[key];
+      }
+    });
+    
+    // Load the environment file
     dotenv.config({ path: envFilePath });
+    
+    // Force set NODE_ENV to match our intended environment
+    process.env.NODE_ENV = environment;
   } else {
-    console.log(`Environment file ${envFilePath} not found. Falling back to .env`);
-    dotenv.config();
+    console.error(`[ENV CONFIG] ERROR: Environment file ${envFilePath} not found. Application cannot start.`);
+    process.exit(1); // Exit the application if environment file is missing
   }
   
-  console.log(`Application running in ${environment.toUpperCase()} mode`);
+  console.log(`[ENV CONFIG] Application running in ${process.env.NODE_ENV} mode`);
+  console.log(`[ENV CONFIG] DB_HOST=${process.env.DATABASE_URL?.split('@')[1]?.split('/')[0]}`);
+  console.log(`[ENV CONFIG] REDIS_HOST=${process.env.REDIS_HOST}`);
 }
 
 // Load environment variables
@@ -45,22 +59,17 @@ loadEnvFile();
 
 // Export a function that returns the configuration object
 export default () => ({
-  env: process.env.NODE_ENV || 'development',
+  env: process.env.NODE_ENV,
   
-  // Database configuration
+  // Database configuration - only use DATABASE_URL 
   db: {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432', 10),
-    name: process.env.DB_NAME || process.env.DB_DATABASE,
-    password: process.env.DB_PASSWORD,
-    user: process.env.DB_USER || process.env.DB_USERNAME,
     url: process.env.DATABASE_URL,
   },
   
   // Redis configuration
   redis: {
     host: process.env.REDIS_HOST,
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    port: parseInt(process.env.REDIS_PORT, 10),
     password: process.env.REDIS_PASSWORD,
     restUrl: process.env.UPSTASH_REDIS_REST_URL,
     restToken: process.env.UPSTASH_REDIS_REST_TOKEN,
@@ -68,42 +77,42 @@ export default () => ({
   
   // OTP configuration
   otp: {
-    length: parseInt(process.env.OTP_LENGTH || '6', 10),
-    expirationMs: parseInt(process.env.OTP_EXPIRATION_MS || '300000', 10),
-    expirationMinutes: parseInt(process.env.OTP_EXPIRATION_MINUTES || '5', 10),
+    length: parseInt(process.env.OTP_LENGTH, 10),
+    expirationMs: parseInt(process.env.OTP_EXPIRATION_MS, 10),
+    expirationMinutes: parseInt(process.env.OTP_EXPIRATION_MINUTES, 10),
   },
   
   // Email configuration (no-reply)
   email: {
-    host: process.env.NOREPLY_HOST || process.env.MAIL_HOST,
-    username: process.env.NOREPLY_USERNAME || process.env.MAIL_USER,
-    password: process.env.NOREPLY_PASSWORD || process.env.MAIL_PASSWORD,
-    email: process.env.NOREPLY_EMAIL || process.env.MAIL_FROM,
+    host: process.env.NOREPLY_HOST,
+    username: process.env.NOREPLY_USERNAME,
+    password: process.env.NOREPLY_PASSWORD,
+    email: process.env.NOREPLY_EMAIL,
   },
   
   // External API keys
   apiKeys: {
     alchemy: process.env.ALCHEMY_API_KEY,
-    paycrest: process.env.PAYCREST_API_KEY || process.env.PAYCREST_API,
+    paycrest: process.env.PAYCREST_API,
   },
   
   // Authentication and security
   security: {
     jwtSecret: process.env.JWT_SECRET,
     encryptionKey: process.env.ENCRYPTION_KEY,
-    jwtExpiration: process.env.JWT_EXPIRATION || '1d',
+    jwtExpiration: process.env.JWT_EXPIRATION,
   },
   
   // Blockradar API configuration
   blockradar: {
     apiKey: process.env.BLOCKRADAR_API_KEY,
     walletId: process.env.WALLET_ID,
-    network: process.env.NETWORK || 'mainnet',
+    network: process.env.NETWORK,
   },
   
   // Paycrest API configuration
   paycrest: {
-    apiKey: process.env.PAYCREST_API_KEY || process.env.PAYCREST_API,
-    baseUrl: process.env.PAYCREST_BASE_URL || 'https://api.paycrest.io',
+    apiKey: process.env.PAYCREST_API,
+    baseUrl: process.env.PAYCREST_BASE_URL,
   }
 });

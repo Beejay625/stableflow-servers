@@ -8,16 +8,16 @@ async function setBusinessWallet() {
     // Get business ID from command line
     const businessId = process.argv[2];
     const walletAddress = process.argv[3];
-    const walletId = process.argv[4];
+    const addressId = process.argv[4];
     
-    if (!businessId || !walletAddress || !walletId) {
-      console.error('Please provide businessId, walletAddress, and walletId as arguments');
+    if (!businessId || !walletAddress || !addressId) {
+      console.error('Please provide businessId, walletAddress, and addressId as arguments');
       process.exit(1);
     }
 
     console.log(`Setting wallet details for business: ${businessId}`);
     console.log(`Wallet Address: ${walletAddress}`);
-    console.log(`Wallet ID: ${walletId}`);
+    console.log(`Address ID: ${addressId}`);
     
     // Create a standalone application
     const app = await NestFactory.createApplicationContext(AppModule);
@@ -41,11 +41,11 @@ async function setBusinessWallet() {
     console.log(`Name: ${business.name}`);
     console.log(`Onboarding step: ${business.onboardingStep}`);
     console.log(`Wallet address: ${business.walletAddress || 'Not set'}`);
-    console.log(`Wallet ID: ${business.walletId || 'Not set'}`);
+    console.log(`Address ID: ${business.addressId || 'Not set'}`);
     
     // Update the business with wallet details
     business.walletAddress = walletAddress;
-    business.walletId = walletId;
+    business.addressId = addressId;
     
     // Save the updated business
     await businessRepository.save(business);
@@ -58,12 +58,12 @@ async function setBusinessWallet() {
     console.log(`Name: ${updatedBusiness.name}`);
     console.log(`Onboarding step: ${updatedBusiness.onboardingStep}`);
     console.log(`Wallet address: ${updatedBusiness.walletAddress || 'Not set'}`);
-    console.log(`Wallet ID: ${updatedBusiness.walletId || 'Not set'}`);
+    console.log(`Address ID: ${updatedBusiness.addressId || 'Not set'}`);
+    
+    console.log('\nWallet details set successfully');
     
     // Close the application
     await app.close();
-    
-    console.log('\nWallet details set successfully!');
     
   } catch (error) {
     console.error('Error setting business wallet:', error);
@@ -71,5 +71,5 @@ async function setBusinessWallet() {
   }
 }
 
-// Run the script
+// Run the function
 setBusinessWallet(); 

@@ -35,7 +35,7 @@ describe('BusinessResponseDto', () => {
       };
       // Create wallet details
       dto.walletDetails = new WalletDetailsDto();
-      dto.walletDetails.walletId = '12345';
+      dto.walletDetails.addressId = '12345';
       dto.walletDetails.address = '0x123456789';
       dto.walletDetails.network = 'testnet';
       dto.walletDetails.isEvmCompatible = true;
@@ -94,7 +94,7 @@ describe('BusinessResponseDto', () => {
             updatedAt: expect.any(String)
           },
           walletDetails: {
-            walletId: '12345',
+            addressId: '12345',
             address: '0x123456789',
             network: 'testnet',
             isEvmCompatible: true,
@@ -139,7 +139,7 @@ describe('BusinessResponseDto', () => {
       // Create wallet details
       businessDto.walletDetails = new WalletDetailsDto();
       businessDto.walletDetails.address = '0x123456789';
-      businessDto.walletDetails.walletId = '12345';
+      businessDto.walletDetails.addressId = '12345';
       businessDto.walletDetails.network = 'testnet';
       businessDto.walletDetails.isEvmCompatible = true;
       businessDto.walletDetails.metadata = { user_id: 'e3dc6448-cf26-414a-ba2c-1cf5a6b507d6' };

@@ -30,8 +30,8 @@ export class BankDetailsDto {
  * Contains cryptocurrency wallet information
  */
 export class WalletDetailsDto {
-  @ApiProperty({ description: 'Wallet ID from blockchain provider', example: '12345' })
-  walletId: string;
+  @ApiProperty({ description: 'Address ID from blockchain provider', example: '12345' })
+  addressId: string;
 
   @ApiProperty({ description: 'Wallet address', example: '0xf5f2817A086e747a7c45429993338070Af8f3A81' })
   address: string;
