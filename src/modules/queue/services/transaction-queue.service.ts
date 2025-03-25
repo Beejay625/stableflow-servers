@@ -118,7 +118,7 @@ export class TransactionQueueService {
         select: ['status']
     });
 
-    if (transaction?.status === TransactionStatus.COMPLETED) {
+    if (transaction?.status === TransactionStatus.SETTLED) {
         this.logger.warn(`Transaction ${transactionId} already completed`);
         return null; // Database-level final state check
     }

@@ -381,6 +381,7 @@ export class OfframpService {
 
   /**
    * Process for creating and tracking an order end-to-end
+   * Returns initial order creation result with transaction hash and order ID
    */
   async processOrder(transaction: Transaction): Promise<{
     txHash: string;
@@ -388,30 +389,144 @@ export class OfframpService {
     status: TransactionStatus;
   }> {
     try {
-      // Step 1: Create the order
+      this.logger.log(`Processing offramp order for transaction ${transaction.id}`);
+
+      // Step 1: Create the order and get transaction hash
       const txHash = await this.createOrder(transaction.id);
+      this.logger.log(`Order created with txHash: ${txHash}`);
       
-      // Step 2: Wait a short time for transaction to be recognized
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Step 2: Wait for transaction receipt (confirms contract write)
+      const receipt = await this.provider.getTransactionReceipt(txHash);
+      if (!receipt || !receipt.status) {
+        throw new Error('Contract write failed or reverted');
+      }
       
-      // Step 3: Get the order ID
+      // Step 3: Get the order ID from transaction logs
       const orderId = await this.getOrderIdFromTransaction(
         txHash, 
         transaction.senderAddress, 
         transaction.tokenAddress
       );
-      
-      // Step 4: Check initial status
-      const orderStatus = await this.getOrderStatus(orderId);
-      const status = this.mapOrderStatusToTransactionStatus(orderStatus.data.status);
-      
+      this.logger.log(`Retrieved orderId: ${orderId}`);
+
+      // Step 4: Update transaction metadata with order details
+      await this.transactionRepository.update(
+        { id: transaction.id },
+        { 
+          offrampOrderId: orderId,
+          metadata: {
+            ...(transaction.metadata || {}),
+            offramp: {
+              txHash,
+              orderId,
+              contractWriteConfirmed: true,
+              contractWriteTime: new Date().toISOString()
+            }
+          }
+        }
+      );
+
+      // Step 5: Initial status is PROCESSING after successful contract write
       return {
         txHash,
         orderId,
-        status
+        status: TransactionStatus.PROCESSING
       };
     } catch (error) {
       this.logger.error(`Error processing order: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Handles webhook updates for order status
+   * This is the source of truth for final status updates
+   */
+  async handleOrderStatusWebhook(
+    orderId: string,
+    status: string,
+    additionalData?: any
+  ): Promise<void> {
+    try {
+      this.logger.log(`Received webhook for order ${orderId} with status: ${status}`);
+
+      // Find transaction by offramp order ID
+      const transaction = await this.transactionRepository.findOne({
+        where: { offrampOrderId: orderId }
+      });
+
+      if (!transaction) {
+        throw new Error(`No transaction found for order ID: ${orderId}`);
+      }
+
+      // Map the webhook status to our transaction status
+      const newStatus = this.mapOrderStatusToTransactionStatus(status);
+      
+      // Update metadata based on status
+      const metadata = {
+        ...(transaction.metadata || {}),
+        offramp: {
+          ...transaction.metadata?.offramp,
+          lastWebhookStatus: status,
+          lastWebhookTime: new Date().toISOString()
+        }
+      };
+
+      // Add status-specific metadata
+      switch (status.toLowerCase()) {
+        case 'settled':
+          metadata.offramp.settlementDetails = additionalData;
+          metadata.offramp.settledAt = new Date().toISOString();
+          break;
+        case 'expired':
+          metadata.offramp.expiryReason = additionalData?.reason;
+          metadata.offramp.expiredAt = new Date().toISOString();
+          break;
+        case 'refunded':
+          metadata.offramp.refundDetails = additionalData;
+          metadata.offramp.refundedAt = new Date().toISOString();
+          break;
+      }
+
+      // Update transaction with new status and metadata
+      await this.transactionRepository.update(
+        { id: transaction.id },
+        { 
+          status: newStatus,
+          metadata,
+          processedAt: new Date() // Update processing time for final states
+        }
+      );
+
+      this.logger.log(`Updated transaction ${transaction.id} to status: ${newStatus}`);
+    } catch (error) {
+      this.logger.error(`Error handling webhook: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Check current order status via API
+   * Used for monitoring but not for final status updates
+   */
+  async checkOrderStatus(orderId: string): Promise<{
+    status: string;
+    shouldUpdateTransaction: boolean;
+  }> {
+    try {
+      const orderStatus = await this.getOrderStatus(orderId);
+      const status = orderStatus.data.status.toLowerCase();
+
+      // Only suggest updates for non-final states
+      // Final states (settled, refunded) should come from webhook
+      const shouldUpdateTransaction = ['pending', 'processing'].includes(status);
+
+      return {
+        status,
+        shouldUpdateTransaction
+      };
+    } catch (error) {
+      this.logger.error(`Error checking order status: ${error.message}`, error.stack);
       throw error;
     }
   }

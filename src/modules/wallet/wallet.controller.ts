@@ -389,7 +389,7 @@ export class WalletController {
     }
     
     // Update status and add audit information in metadata for accountability
-    transaction.status = TransactionStatus.COMPLETED;
+    transaction.status = TransactionStatus.SETTLED;
     transaction.metadata = {
       ...(transaction.metadata || {}),
       manuallyCompleted: true,
