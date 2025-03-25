@@ -29,6 +29,7 @@ import { MoreThanOrEqual } from 'typeorm';
 import { Public } from '../../common/decorators/public.decorator';
 import { Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import { OfframpService } from '../offramp/offramp.service';
 
 
 /**
@@ -48,7 +49,8 @@ export class WalletController {
     private readonly sortTransactionService: SortTransactionService,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly dataSource: DataSource
+    private readonly dataSource: DataSource,
+    private readonly offrampService: OfframpService
   ) {}
 
   /**
@@ -70,6 +72,10 @@ export class WalletController {
    * @returns Acknowledgment with transaction ID
    */
   @Post('webhook/blockradar')
+  @ApiOperation({
+    summary: 'Handle blockchain transaction webhook',
+    description: 'Processes blockchain transaction webhooks from Blockradar'
+  })
   @Public()
   async handleBlockradarWebhook(@Body() payload: any, @Res() res: Response) {
     try {
@@ -115,6 +121,7 @@ export class WalletController {
           .findBusinessForTransaction(transactionData);
 
         if (business) {
+          // Save the transaction to the database
           await this.sortTransactionService.saveTransactionToBusiness(
             transactionId,
             business,
@@ -128,8 +135,8 @@ export class WalletController {
             walletId,
           );
           
-          // Queue for processing - will happen asynchronously
-          await this.transactionQueue.queueTransaction(transactionId);
+          // Add to offramp queue directly instead of transaction queue
+          await this.offrampService.addToOfframpQueue(transactionId);
         }
       }
 

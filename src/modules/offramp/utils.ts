@@ -1,5 +1,5 @@
 import { Token } from './interfaces/transaction.interface';
-import fetch from 'node-fetch';
+import axios from 'axios';
 
 /**
  * Maps environment network configuration to actual network names
@@ -130,22 +130,23 @@ async function customSmartContractWrite({
   method: string;
   parameters: string[];
 }): Promise<any> {
-  const options = {
-    method: 'POST',
-    headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const response = await axios.post(
+    `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/write`,
+    {
       abi,
       address,
       method,
       parameters,
-    }),
-  };
-
-  const response = await fetch(`https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/write`, options);
-  if (!response.ok) {
-    throw new Error(`Failed to write contract: ${response.statusText}`);
-  }
-  return response.json();
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  
+  return response.data;
 }
 
 export { 

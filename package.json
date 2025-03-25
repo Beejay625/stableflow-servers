@@ -37,6 +37,7 @@
     "migration:cleanup:auto": "find src/migrations -name 'AutoGenMigration_*.ts' -type f -delete"
   },
   "dependencies": {
+    "@liaoliaots/nestjs-redis": "^9.0.5",
     "@nestjs/axios": "^4.0.0",
     "@nestjs/bull": "^11.0.2",
     "@nestjs/common": "^9.0.0",

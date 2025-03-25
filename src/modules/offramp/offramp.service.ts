@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,6 +11,7 @@ import { Business } from '../business/entities/business.entity';
 import { Transaction } from './interfaces/transaction.interface';
 import { TransactionStatus } from '../wallet/constants/status.enum';
 import { OrderStatusResponse, PublicKeyResponse } from './interfaces/response.interface';
+import { WebhookPayload, WebhookEventType } from './interfaces/webhook.interface';
 import { gatewayAbi, erc20Abi } from './abis/abi';
 import { 
   fetchSupportedTokens, 
@@ -20,6 +21,8 @@ import {
   getTokenAddress
 } from './utils';
 import { PrepareTransactionService } from './preparetransaction.service';
+import { RedisService } from '../redis/redis.service';
+import { RedlockService } from '../redis/redlock.service';
 
 /**
  * Service responsible for handling cryptocurrency off-ramping operations.
@@ -41,13 +44,22 @@ export class OfframpService {
   private readonly apiKey: string;
   private readonly network: string;
 
+  // Redis key prefixes
+  private readonly REDIS_AWAITING_WEBHOOK = 'offramp:awaiting_webhook';
+  private readonly REDIS_PROCESSING = 'offramp:processing';
+  private readonly REDIS_REFUND_QUEUE = 'offramp:refund_queue';
+  private readonly REDIS_MANUAL_REVIEW = 'offramp:manual_review';
+
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    private readonly prepareTransactionService: PrepareTransactionService
+    private readonly prepareTransactionService: PrepareTransactionService,
+    private readonly redisService: RedisService,
+    private readonly redlockService: RedlockService,
+    @Optional() @Inject('OfframpQueueProcessor') private readonly queueProcessor?: any
   ) {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.ngnProviderId = this.configService.get<string>('NGN_PROVIDER_ID');
@@ -64,6 +76,9 @@ export class OfframpService {
     this.provider = new ethers.JsonRpcProvider(rpcUrl);
     
     this.logger.log(`Initialized OfframpService with network: ${this.network}`);
+
+    // Get IDs from environment variables
+    this.addressId = this.configService.get<string>('blockradar.addressId');
   }
 
   /**
@@ -385,53 +400,81 @@ export class OfframpService {
    */
   async processOrder(transaction: Transaction): Promise<{
     txHash: string;
-    orderId: string;
+    orderId?: string;
     status: TransactionStatus;
   }> {
     try {
       this.logger.log(`Processing offramp order for transaction ${transaction.id}`);
 
       // Step 1: Create the order and get transaction hash
-      const txHash = await this.createOrder(transaction.id);
-      this.logger.log(`Order created with txHash: ${txHash}`);
-      
-      // Step 2: Wait for transaction receipt (confirms contract write)
-      const receipt = await this.provider.getTransactionReceipt(txHash);
-      if (!receipt || !receipt.status) {
-        throw new Error('Contract write failed or reverted');
-      }
-      
-      // Step 3: Get the order ID from transaction logs
-      const orderId = await this.getOrderIdFromTransaction(
-        txHash, 
-        transaction.senderAddress, 
-        transaction.tokenAddress
-      );
-      this.logger.log(`Retrieved orderId: ${orderId}`);
-
-      // Step 4: Update transaction metadata with order details
-      await this.transactionRepository.update(
-        { id: transaction.id },
-        { 
-          offrampOrderId: orderId,
-          metadata: {
-            ...(transaction.metadata || {}),
-            offramp: {
-              txHash,
-              orderId,
-              contractWriteConfirmed: true,
-              contractWriteTime: new Date().toISOString()
-            }
-          }
+      let txHash: string;
+      try {
+        txHash = await this.createOrder(transaction.id);
+        this.logger.log(`Order created with txHash: ${txHash}`);
+        
+        // Add to awaiting webhook queue with transaction details
+        await this.addToAwaitingWebhook(transaction.id, {
+          txHash,
+          transactionId: transaction.id,
+          senderAddress: transaction.senderAddress,
+          tokenAddress: transaction.tokenAddress,
+          amount: transaction.amount,
+          attemptTime: new Date().toISOString()
+        });
+        
+        // Update transaction with hash information but keep as UNSETTLED
+        // Real status update will come from webhook
+        await this.transactionRepository.findOne({ where: { id: transaction.id } })
+          .then(existingTransaction => {
+            // Get current metadata or initialize if not exists
+            const currentMetadata = existingTransaction?.metadata || {};
+            
+            // Merge with new metadata
+            const updatedMetadata = {
+              ...currentMetadata,
+              offramp: {
+                ...(currentMetadata.offramp || {}),
+                txHash,
+                blockchainAttempted: true,
+                blockchainAttemptTime: new Date().toISOString()
+              }
+            };
+            
+            // Update the transaction
+            return this.transactionRepository.update(
+              { id: transaction.id },
+              { metadata: updatedMetadata }
+            );
+          });
+        
+        return {
+          txHash,
+          status: TransactionStatus.UNSETTLED
+        };
+      } catch (error) {
+        // Only transaction creation errors that happen before blockchain
+        // are safe to retry
+        if (error.message.includes('API error') || 
+            error.message.includes('validation failed') ||
+            error.message.includes('Invalid parameters')) {
+          this.logger.error(`Clear error before blockchain, safe to retry: ${error.message}`);
+          throw error; // Rethrow to trigger retry
         }
-      );
-
-      // Step 5: Initial status is PROCESSING after successful contract write
-      return {
-        txHash,
-        orderId,
-        status: TransactionStatus.PROCESSING
-      };
+        
+        // For other errors, we're not sure if transaction went through
+        // Mark as awaiting webhook to be safe
+        this.logger.warn(`Uncertain error, marking as awaiting webhook: ${error.message}`);
+        await this.addToAwaitingWebhook(transaction.id, {
+          error: error.message,
+          transactionId: transaction.id,
+          attemptTime: new Date().toISOString()
+        });
+        
+        return {
+          txHash: 'unknown',
+          status: TransactionStatus.UNSETTLED
+        };
+      }
     } catch (error) {
       this.logger.error(`Error processing order: ${error.message}`, error.stack);
       throw error;
@@ -439,96 +482,319 @@ export class OfframpService {
   }
 
   /**
-   * Handles webhook updates for order status
-   * This is the source of truth for final status updates
+   * Handles webhook events from the offramp provider
+   * Using Redis to ensure atomicity and prevent race conditions
+   * 
+   * @param payload The webhook payload from the offramp provider
    */
-  async handleOrderStatusWebhook(
-    orderId: string,
-    status: string,
-    additionalData?: any
-  ): Promise<void> {
+  async handleWebhook(payload: WebhookPayload): Promise<void> {
+    const { event, data } = payload;
+    const orderId = data.id;
+    
+    this.logger.log(`Processing webhook event: ${event} for order: ${orderId}`);
+    
+    // Use a distributed lock to ensure atomic transaction processing
+    const lockResource = `webhook:${orderId}`;
+    const lockTtl = 30000; // 30 seconds lock TTL
+    
     try {
-      this.logger.log(`Received webhook for order ${orderId} with status: ${status}`);
-
-      // Find transaction by offramp order ID
-      const transaction = await this.transactionRepository.findOne({
-        where: { offrampOrderId: orderId }
+      // Execute with a distributed lock to prevent race conditions
+      await this.redlockService.using(lockResource, lockTtl, async () => {
+        // Find the transaction by offramp order ID
+        const transaction = await this.transactionRepository.findOne({
+          where: { offrampOrderId: orderId }
+        });
+        
+        // If no transaction found with this order ID, check if we have a transaction
+        // in the awaiting_webhook queue that might match
+        if (!transaction) {
+          this.logger.log(`No transaction found with orderId: ${orderId}, checking awaiting_webhook queue`);
+          
+          // If we have reference, we might be able to match it with a transaction ID
+          if (data.reference) {
+            const transactionByRef = await this.transactionRepository.findOne({
+              where: { transactionId: data.reference }
+            });
+            
+            if (transactionByRef) {
+              this.logger.log(`Found transaction by reference: ${data.reference}`);
+              
+              // Update the transaction with the order ID and process the webhook
+              await this.transactionRepository.update(
+                { id: transactionByRef.id },
+                { offrampOrderId: orderId }
+              );
+              
+              // Process the webhook for this transaction
+              await this.processWebhookEvent(transactionByRef, event, data);
+              return;
+            }
+          }
+          
+          // Still no match, log for manual review
+          this.logger.warn(`No matching transaction found for webhook. Order ID: ${orderId}, Event: ${event}`);
+          await this.addToManualReview(orderId, event, data, 'no_matching_transaction');
+          return;
+        }
+        
+        // Process the webhook event for the found transaction
+        await this.processWebhookEvent(transaction, event, data);
       });
-
-      if (!transaction) {
-        throw new Error(`No transaction found for order ID: ${orderId}`);
-      }
-
-      // Map the webhook status to our transaction status
-      const newStatus = this.mapOrderStatusToTransactionStatus(status);
-      
-      // Update metadata based on status
-      const metadata = {
-        ...(transaction.metadata || {}),
-        offramp: {
-          ...transaction.metadata?.offramp,
-          lastWebhookStatus: status,
-          lastWebhookTime: new Date().toISOString()
-        }
-      };
-
-      // Add status-specific metadata
-      switch (status.toLowerCase()) {
-        case 'settled':
-          metadata.offramp.settlementDetails = additionalData;
-          metadata.offramp.settledAt = new Date().toISOString();
-          break;
-        case 'expired':
-          metadata.offramp.expiryReason = additionalData?.reason;
-          metadata.offramp.expiredAt = new Date().toISOString();
-          break;
-        case 'refunded':
-          metadata.offramp.refundDetails = additionalData;
-          metadata.offramp.refundedAt = new Date().toISOString();
-          break;
-      }
-
-      // Update transaction with new status and metadata
-      await this.transactionRepository.update(
-        { id: transaction.id },
-        { 
-          status: newStatus,
-          metadata,
-          processedAt: new Date() // Update processing time for final states
-        }
-      );
-
-      this.logger.log(`Updated transaction ${transaction.id} to status: ${newStatus}`);
     } catch (error) {
-      this.logger.error(`Error handling webhook: ${error.message}`, error.stack);
-      throw error;
+      this.logger.error(`Error processing webhook for order ${orderId}: ${error.message}`, error.stack);
+      // Still ensure we add to manual review if there's an error
+      await this.addToManualReview(orderId, event, data, `error: ${error.message}`);
     }
   }
-
+  
   /**
-   * Check current order status via API
-   * Used for monitoring but not for final status updates
+   * Processes a webhook event and updates the transaction status and metadata
+   * 
+   * @param transaction The transaction to update
+   * @param event The webhook event type
+   * @param data The webhook event data
    */
-  async checkOrderStatus(orderId: string): Promise<{
-    status: string;
-    shouldUpdateTransaction: boolean;
-  }> {
-    try {
-      const orderStatus = await this.getOrderStatus(orderId);
-      const status = orderStatus.data.status.toLowerCase();
-
-      // Only suggest updates for non-final states
-      // Final states (settled, refunded) should come from webhook
-      const shouldUpdateTransaction = ['pending', 'processing'].includes(status);
-
-      return {
-        status,
-        shouldUpdateTransaction
-      };
-    } catch (error) {
-      this.logger.error(`Error checking order status: ${error.message}`, error.stack);
-      throw error;
+  private async processWebhookEvent(
+    transaction: WalletTransaction,
+    event: WebhookEventType,
+    data: any
+  ): Promise<void> {
+    this.logger.log(`Processing ${event} for transaction: ${transaction.id}`);
+    
+    // Get current metadata or initialize if not exists
+    const metadata = {
+      ...(transaction.metadata || {}),
+      offramp: {
+        ...(transaction.metadata?.offramp || {}),
+        lastWebhookStatus: event,
+        lastWebhookTime: new Date().toISOString(),
+        webhookHistory: [
+          ...(transaction.metadata?.offramp?.webhookHistory || []),
+          {
+            status: event,
+            timestamp: new Date().toISOString(),
+            details: data
+          }
+        ]
+      }
+    };
+    
+    let newStatus: TransactionStatus;
+    
+    // Handle based on event type
+    switch (event) {
+      case WebhookEventType.PENDING:
+        // Confirm transaction on blockchain and update to PROCESSING
+        newStatus = TransactionStatus.PROCESSING;
+        
+        // Update metadata with order details
+        metadata.offramp.orderId = data.id;
+        metadata.offramp.contractWriteConfirmed = true;
+        metadata.offramp.contractWriteTime = data.createdAt || new Date().toISOString();
+        
+        // Remove from awaiting_webhook queue if present
+        await this.removeFromAwaitingWebhook(transaction.id);
+        
+        // Add to processing queue
+        await this.addToProcessingQueue(transaction.id, data.id);
+        break;
+        
+      case WebhookEventType.SETTLED:
+        // Final successful state - fiat sent
+        newStatus = TransactionStatus.SETTLED;
+        
+        // Update metadata with settlement details
+        metadata.offramp.settlementDetails = {
+          amount: parseFloat(data.amountPaid || data.amount),
+          rate: parseFloat(data.rate),
+          completedAt: data.updatedAt || new Date().toISOString(),
+          bankReference: data.reference,
+          percentSettled: parseFloat(data.percentSettled || '100')
+        };
+        metadata.offramp.settledAt = data.updatedAt || new Date().toISOString();
+        
+        // Remove from all processing queues
+        await this.cleanupFromAllQueues(transaction.id);
+        break;
+        
+      case WebhookEventType.EXPIRED:
+        // Payment window expired, will trigger refund
+        newStatus = TransactionStatus.STALLED;
+        
+        // Update metadata with expiry details
+        metadata.offramp.expiryReason = data.reason || 'payment_window_expired';
+        metadata.offramp.expiredAt = data.updatedAt || new Date().toISOString();
+        
+        // Add to refund queue
+        await this.addToRefundQueue(transaction.id, data.id);
+        break;
+        
+      case WebhookEventType.REFUNDED:
+        // Final failure state - funds returned
+        newStatus = TransactionStatus.REFUNDED;
+        
+        // Update metadata with refund details
+        metadata.offramp.refundDetails = {
+          amount: parseFloat(data.amountReturned || data.amount),
+          completedAt: data.updatedAt || new Date().toISOString(),
+          refundTxHash: data.txHash
+        };
+        metadata.offramp.refundedAt = data.updatedAt || new Date().toISOString();
+        
+        // Remove from all processing queues
+        await this.cleanupFromAllQueues(transaction.id);
+        break;
+        
+      default:
+        this.logger.warn(`Unknown event type: ${event}, keeping current status`);
+        newStatus = transaction.status; // Keep current status
     }
+    
+    // Update the transaction status and metadata
+    await this.transactionRepository.update(
+      { id: transaction.id },
+      {
+        status: newStatus,
+        metadata,
+        processedAt: new Date()
+      }
+    );
+    
+    this.logger.log(`Updated transaction ${transaction.id} to status: ${newStatus}`);
+  }
+  
+  /**
+   * Add a transaction to the awaiting webhook queue
+   * 
+   * @param transactionId The transaction ID
+   * @param requestData Original request data (optional)
+   */
+  async addToAwaitingWebhook(transactionId: string, requestData?: any): Promise<void> {
+    const client = this.redisService.getClient();
+    const key = `${this.REDIS_AWAITING_WEBHOOK}:${transactionId}`;
+    
+    await client.hset(
+      this.REDIS_AWAITING_WEBHOOK,
+      transactionId,
+      JSON.stringify({
+        status: TransactionStatus.UNSETTLED,
+        attemptTime: new Date().toISOString(),
+        lastCheck: new Date().toISOString(),
+        originalRequest: requestData || {},
+        blockchainAttempted: true
+      })
+    );
+    
+    this.logger.log(`Added transaction ${transactionId} to awaiting_webhook queue`);
+  }
+  
+  /**
+   * Remove a transaction from the awaiting webhook queue
+   * 
+   * @param transactionId The transaction ID
+   */
+  async removeFromAwaitingWebhook(transactionId: string): Promise<void> {
+    const client = this.redisService.getClient();
+    await client.hdel(this.REDIS_AWAITING_WEBHOOK, transactionId);
+    this.logger.log(`Removed transaction ${transactionId} from awaiting_webhook queue`);
+  }
+  
+  /**
+   * Add a transaction to the processing queue
+   * 
+   * @param transactionId The transaction ID
+   * @param orderId The order ID
+   */
+  async addToProcessingQueue(transactionId: string, orderId: string): Promise<void> {
+    const client = this.redisService.getClient();
+    
+    await client.hset(
+      this.REDIS_PROCESSING,
+      transactionId,
+      JSON.stringify({
+        status: TransactionStatus.PROCESSING,
+        orderId,
+        startedAt: new Date().toISOString(),
+        lastUpdate: new Date().toISOString()
+      })
+    );
+    
+    this.logger.log(`Added transaction ${transactionId} to processing queue with order ${orderId}`);
+  }
+  
+  /**
+   * Add a transaction to the refund queue
+   * 
+   * @param transactionId The transaction ID
+   * @param orderId The order ID
+   */
+  async addToRefundQueue(transactionId: string, orderId: string): Promise<void> {
+    const client = this.redisService.getClient();
+    
+    await client.hset(
+      this.REDIS_REFUND_QUEUE,
+      transactionId,
+      JSON.stringify({
+        status: TransactionStatus.STALLED,
+        orderId,
+        expiryReason: 'payment_window_expired',
+        refundAttempts: 0,
+        lastRefundAttempt: null
+      })
+    );
+    
+    this.logger.log(`Added transaction ${transactionId} to refund queue`);
+  }
+  
+  /**
+   * Add a transaction to the manual review queue
+   * 
+   * @param orderId The order ID
+   * @param event The event type
+   * @param data The webhook data
+   * @param reason The reason for manual review
+   */
+  async addToManualReview(
+    orderId: string,
+    event: string,
+    data: any,
+    reason: string
+  ): Promise<void> {
+    const client = this.redisService.getClient();
+    const reviewId = `${orderId}-${Date.now()}`;
+    
+    await client.hset(
+      this.REDIS_MANUAL_REVIEW,
+      reviewId,
+      JSON.stringify({
+        orderId,
+        event,
+        data,
+        reason,
+        createdAt: new Date().toISOString(),
+        status: 'pending_review'
+      })
+    );
+    
+    this.logger.log(`Added order ${orderId} to manual review queue: ${reason}`);
+  }
+  
+  /**
+   * Clean up a transaction from all Redis queues
+   * 
+   * @param transactionId The transaction ID
+   */
+  async cleanupFromAllQueues(transactionId: string): Promise<void> {
+    const client = this.redisService.getClient();
+    
+    // Remove from all queues
+    await Promise.all([
+      client.hdel(this.REDIS_AWAITING_WEBHOOK, transactionId),
+      client.hdel(this.REDIS_PROCESSING, transactionId),
+      client.hdel(this.REDIS_REFUND_QUEUE, transactionId)
+    ]);
+    
+    this.logger.log(`Removed transaction ${transactionId} from all queues`);
   }
 
   /**
@@ -583,6 +849,36 @@ export class OfframpService {
     } catch (error) {
       this.logger.error(`Error checking allowance: ${error.message}`, error.stack);
       throw error;
+    }
+  }
+
+  /**
+   * Adds a transaction to the offramp processing queue
+   * 
+   * @param transactionId The ID of the transaction to add to the queue
+   * @returns Promise<boolean> Whether the transaction was added successfully
+   */
+  async addToOfframpQueue(transactionId: string): Promise<boolean> {
+    try {
+      // If the queue processor is not available, log a warning and return
+      if (!this.queueProcessor) {
+        this.logger.warn(`Cannot add transaction ${transactionId} to offramp queue - OfframpQueueProcessor not available`);
+        return false;
+      }
+      
+      // Add the transaction to the offramp queue
+      const result = await this.queueProcessor.addToQueue(transactionId);
+      
+      if (result) {
+        this.logger.log(`Added transaction ${transactionId} to offramp processing queue`);
+      } else {
+        this.logger.warn(`Failed to add transaction ${transactionId} to offramp queue`);
+      }
+      
+      return result;
+    } catch (error) {
+      this.logger.error(`Error adding transaction ${transactionId} to offramp queue: ${error.message}`, error.stack);
+      return false;
     }
   }
 } 

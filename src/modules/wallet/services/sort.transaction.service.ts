@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../../business/entities/business.entity';
 import { Transaction } from '../entities/transaction.entity';
 import { GetTransactionService } from './gettransaction.service';
 import { TransactionStatus } from '../constants/status.enum';
+
+// Import the OfframpService
+import { OfframpService } from '../../offramp/offramp.service';
 
 @Injectable()
 export class SortTransactionService {
@@ -15,7 +18,9 @@ export class SortTransactionService {
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly getTransactionService: GetTransactionService
+    private readonly getTransactionService: GetTransactionService,
+    // Inject the OfframpService as an optional dependency
+    @Optional() @Inject(OfframpService) private readonly offrampService?: OfframpService
   ) {}
 
   /**
@@ -107,6 +112,20 @@ export class SortTransactionService {
       this.logger.log(
         `Saved transaction: ${tx.id} with amount ${tokenAmount} for business: ${business.id}, txId: ${transactionId}`,
       );
+
+      // Add to offramp queue if OfframpService is available
+      if (this.offrampService) {
+        try {
+          // Queue the transaction for offramping asynchronously
+          await this.offrampService.addToOfframpQueue(transactionId);
+        } catch (queueError) {
+          // Just log the error but don't throw, to not disrupt the main flow
+          this.logger.error(
+            `Failed to add transaction ${transactionId} to offramp queue: ${queueError.message}`,
+            queueError.stack,
+          );
+        }
+      }
 
       return tx;
     } catch (error) {
