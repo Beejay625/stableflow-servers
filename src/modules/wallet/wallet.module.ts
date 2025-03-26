@@ -12,7 +12,6 @@ import { Transaction } from './entities/transaction.entity';
 import { GetTransactionService } from './services/gettransaction.service';
 import { SortTransactionService } from './services/sort.transaction.service';
 import { WebhookService } from './services/webhook.service';
-import { TransactionProcessor } from './processors/transaction.processor';
 import { QueueModule } from '../queue/queue.module';
 import { WalletController } from './wallet.controller';
 import { JwtModule } from '@nestjs/jwt';
@@ -23,6 +22,7 @@ import { MailService } from '../../common/utils/email';
 import { CommonModule } from '../../common/common.module';
 import { TransactionRecoveryService } from './services/transaction-recovery.service';
 import { OfframpModule } from '../offramp/offramp.module';
+import { WalletConfigService } from '../../common/utils/wallet-config';
 
 @Module({
   imports: [
@@ -59,10 +59,10 @@ import { OfframpModule } from '../offramp/offramp.module';
     GetTransactionService,
     SortTransactionService,
     WebhookService,
-    TransactionProcessor,
     TransactionRepository,
     MailService,
     TransactionRecoveryService,
+    WalletConfigService,
   ],
   exports: [
     WalletService,
@@ -73,6 +73,7 @@ import { OfframpModule } from '../offramp/offramp.module';
     WebhookService,
     TransactionRepository,
     MailService,
+    WalletConfigService,
   ],
 })
 export class WalletModule {} 

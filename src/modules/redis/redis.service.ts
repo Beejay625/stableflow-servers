@@ -146,6 +146,21 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return client.del(key);
   }
 
+  /**
+   * Set a value in Redis with optional expiry
+   * @param key - Key to set
+   * @param value - Value to set
+   * @param expireInSeconds - Optional expiry time in seconds
+   * @returns Promise<'OK'>
+   */
+  async setKey(key: string, value: string, expireInSeconds?: number): Promise<'OK'> {
+    const client = this.getClient();
+    if (expireInSeconds) {
+      return client.set(key, value, 'EX', expireInSeconds);
+    }
+    return client.set(key, value);
+  }
+
   getQueue(name: string, options?: Partial<QueueOptions>): Queue {
     if (!this.queues.has(name)) {
       const defaultOptions: QueueOptions = {

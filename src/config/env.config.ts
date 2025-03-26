@@ -105,8 +105,6 @@ export default () => ({
   
   // Blockradar API configuration
   blockradar: {
-    apiKey: process.env.BLOCKRADAR_API_KEY,
-    walletId: process.env.WALLET_ID,
     network: process.env.NETWORK,
   },
   
@@ -114,5 +112,27 @@ export default () => ({
   paycrest: {
     apiKey: process.env.PAYCREST_API,
     baseUrl: process.env.PAYCREST_BASE_URL,
+  },
+
+  // BEP20 USDT configuration
+  bep20usdt: {
+    apiKey: process.env.BEP20_USDT_API_KEY,
+    walletId: process.env.BEP20_USDT_WALLET_ID,
+  },
+  
+  // USDC on Base chain configuration
+  usdcbase: {
+    apiKey: process.env.USDC_BASE_API_KEY,
+    walletId: process.env.USDC_BASE_WALLET_ID,
+  },
+  
+  // Tron USDT configuration
+  tronusdt: {
+    apiKey: process.env.BLOCKRADAR_API_KEY,
+    walletId: process.env.WALLET_ID,
   }
 });
+
+
+
+

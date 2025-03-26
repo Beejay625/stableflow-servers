@@ -979,9 +979,9 @@ export class OfframpService {
 
   /**
    * Scheduled job to process unsettled transactions
-   * Runs every minute to find and process transactions in UNSETTLED state
+   * Runs every 30 minutes to find and process transactions in UNSETTLED state
    */
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async cronProcessUnsettledTransactions(): Promise<void> {
     this.logger.log(`[DEBUG] CRON JOB: Processing unsettled transactions started at ${new Date().toISOString()}`);
     try {
@@ -994,10 +994,10 @@ export class OfframpService {
 
   /**
    * Scheduled job to check for stalled transactions
-   * Runs every 5 minutes to find and update status of transactions that may be stuck
+   * Runs every 30 minutes to find and update status of transactions that may be stuck
    * Includes timeout handling and detailed error recovery
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_30_MINUTES)
   async checkStalledTransactions(): Promise<void> {
     try {
       this.logger.log('Checking for stalled transactions');

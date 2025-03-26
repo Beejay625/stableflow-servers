@@ -2,11 +2,18 @@ import { Token } from './interfaces/transaction.interface';
 import axios from 'axios';
 
 /**
- * Maps environment network configuration to actual network names
+ * Maps environment network configuration and chain to actual network names
  * @param configNetwork - The network value from environment config
+ * @param chain - The blockchain network from the transaction
  * @returns The actual network name used in the system
  */
-function mapNetworkFromConfig(configNetwork: string): string {
+function mapNetworkFromConfig(configNetwork: string, chain?: string): string {
+  // If chain is provided and matches Base, use Base networks
+  if (chain && chain.toLowerCase() === 'base') {
+    return configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
+  }
+
+  // Default to BNB Smart Chain networks
   switch (configNetwork) {
     case 'mainnet':
       return 'BNB Smart Chain';

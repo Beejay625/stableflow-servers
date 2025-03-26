@@ -5,9 +5,13 @@ import { Business } from '../../business/entities/business.entity';
 import { Transaction } from '../entities/transaction.entity';
 import { GetTransactionService } from './gettransaction.service';
 import { TransactionStatus } from '../constants/status.enum';
+import { ConfigService } from '@nestjs/config';
 
 // Import the OfframpService
 import { OfframpService } from '../../offramp/offramp.service';
+
+// Import WalletConfigService
+import { WalletConfigService } from '../../../common/utils/wallet-config';
 
 @Injectable()
 export class SortTransactionService {
@@ -19,43 +23,35 @@ export class SortTransactionService {
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
     private readonly getTransactionService: GetTransactionService,
+    private readonly walletConfigService: WalletConfigService,
+    private readonly configService: ConfigService,
     // Inject the OfframpService as an optional dependency
     @Optional() @Inject(OfframpService) private readonly offrampService?: OfframpService
   ) {}
 
   /**
    * Find business for a transaction based on recipient address
-   * OPTIMIZED: Uses a single query with OR conditions instead of multiple queries
-   * @param transactionData - Transaction data containing business address
+   * @param transactionData - Transaction data containing recipient address
    * @returns Promise<Business> - The business entity if found
    */
   async findBusinessForTransaction(transactionData: any): Promise<Business> {
-    const { businessAddress } = transactionData;
-    
-    if (!businessAddress) {
-      this.logger.warn('No business address provided for business lookup');
+    const recipientAddress = transactionData.recipientAddress;
+    if (!recipientAddress) {
+      this.logger.warn('No recipient address found in transaction data');
       return null;
     }
 
-    // OPTIMIZATION: Use a single query with OR conditions for both address fields
-    // This reduces the number of database queries from 2 to 1
-    this.logger.debug(`Searching for business by address: ${businessAddress}`);
-    
-    const business = await this.businessRepository.findOne({
-      where: [
-        { walletAddress: businessAddress },
-        { addressId: businessAddress }
-      ],
-      // OPTIMIZATION: Only select fields we need
-      select: ['id', 'name', 'walletAddress', 'addressId'] 
+    // OPTIMIZATION: Use findOneBy for simple exact match - faster than query builder
+    const business = await this.businessRepository.findOneBy({
+      walletAddress: recipientAddress
     });
     
     if (business) {
-      this.logger.debug(`Business found: ${business.id}`);
+      this.logger.log(`Found business ${business.id}`);
       return business;
     }
     
-    this.logger.warn(`No business found for address ${businessAddress}`);
+    this.logger.warn(`No business found for ${recipientAddress}`);
     return null;
   }
 
@@ -66,11 +62,9 @@ export class SortTransactionService {
    * @param tokenAmount - Token amount
    * @param token - Token symbol
    * @param chain - Blockchain name
-   * @param businessAddress - Business address (recipient)
-   * @param addressId - Address ID
-   * @param metadata - Optional metadata to update
+   * @param recipientAddress - Business address (recipient)
    * @param senderAddress - Sender address
-   * @param walletId - Wallet ID
+   * @param metadata - Optional metadata to update
    * @returns Promise<Transaction> - The saved transaction
    */
   async saveTransactionToBusiness(
@@ -79,61 +73,43 @@ export class SortTransactionService {
     tokenAmount: number,
     token: string,
     chain: string,
-    businessAddress: string,
-    addressId: string,
-    metadata?: any,
+    recipientAddress: string,
     senderAddress: string = 'unknown',
-    walletId: string = null,
+    metadata?: any,
   ): Promise<Transaction> {
     try {
-      this.logger.log(
-        `Saving transaction to business: ${business.id}, txId: ${transactionId}`,
-      );
+      this.logger.log(`Step 3: Saving transaction ${transactionId} for business ${business.id}`);
 
-      // OPTIMIZATION: Prepare data before transaction to minimize transaction time
       const txData = {
         transactionId,
         tokenAmount,
         token,
         chain,
-        businessAddress,
+        recipientAddress,
         senderAddress,
-        walletId,
-        addressId,
         business,
         businessId: business.id,
         status: TransactionStatus.UNSETTLED,
         metadata,
       };
 
-      // OPTIMIZATION: Avoid overhead of the create() + save() two-step process
       const tx = await this.transactionRepository.save(txData);
+      this.logger.log(`Step 4: Transaction ${transactionId} saved successfully`);
 
-      this.logger.log(
-        `Saved transaction: ${tx.id} with amount ${tokenAmount} for business: ${business.id}, txId: ${transactionId}`,
-      );
-
-      // Add to offramp queue if OfframpService is available
+      // Process via offramp if available
       if (this.offrampService) {
         try {
-          // Process the transaction directly using the new approach
+          this.logger.log(`Step 5: Starting offramp processing for transaction ${transactionId}`);
           await this.offrampService.processTransaction(tx.id);
         } catch (processError) {
-          // Just log the error but don't throw, to not disrupt the main flow
-          this.logger.error(
-            `Failed to process transaction ${transactionId} for offramp: ${processError.message}`,
-            processError.stack,
-          );
+          this.logger.error(`Failed offramp processing for ${transactionId}: ${processError.message}`);
         }
       }
 
       return tx;
     } catch (error) {
-      this.logger.error(
-        `Error saving transaction to business: ${error.message}`,
-        error.stack,
-      );
-      throw new Error(`Error saving transaction to business: ${error.message}`);
+      this.logger.error(`Failed to save transaction ${transactionId}: ${error.message}`);
+      throw error;
     }
   }
 
@@ -146,58 +122,68 @@ export class SortTransactionService {
     try {
       this.logger.debug(`Fetching details for Transaction ID: ${transactionId}`);
       
-      // Use the getTransactionService to get the raw data
-      const transactionData = await this.getTransactionService.getTransactionDetails(transactionId);
-      
-      // Extract fields required for processing
-      const extractedDetails = {
-        id: transactionId,
-        status: transactionData.status,
-        type: transactionData.type,
-        currency: transactionData.currency,
-        senderAddress: transactionData.senderAddress,
-        businessAddress: transactionData.recipientAddress,
-        tokenName: transactionData.tokenName,
-        tokenSymbol: transactionData.tokenSymbol,
-        token: transactionData.tokenSymbol || transactionData.currency,
-        blockchainName: transactionData.blockchainName,
-        blockchainSymbol: transactionData.blockchainSymbol,
-        blockchain: transactionData.blockchainSymbol,
-        amount: transactionData.amount,
-        amountPaid: transactionData.amountPaid,
-        convertedAmount: transactionData.convertedAmount,
-        convertedGasFee: transactionData.convertedGasFee,
-        hash: transactionData.hash || '',
-        timestamp: transactionData.timestamp || new Date().toISOString(),
-        // Extract walletId properly with type safety
-        walletId: (transactionData as any).wallet?.id || null
+      // First get the transaction details directly to determine wallet configuration
+      // We need to construct an initial request with some blockchain/token data to get wallet configuration
+      // This is just to bootstrap the process
+      const initialData = {
+        // Construct a minimal, dummy transaction data object to start the process
+        transactionId: transactionId,
+        // These will be populated by the API response
+        blockchainName: '',
+        tokenSymbol: '',
+        walletId: ''
       };
       
-      // OPTIMIZATION: Only log in debug mode to reduce overhead
-      if (process.env.NODE_ENV !== 'production') {
-        this.logger.debug('===== TRANSACTION DETAILS =====');
-        this.logger.debug(`Status: ${extractedDetails.status}`);
-        this.logger.debug(`Type: ${extractedDetails.type}`);
-        this.logger.debug(`Currency: ${extractedDetails.currency}`);
-        this.logger.debug(`Sender Address: ${extractedDetails.senderAddress}`);
-        this.logger.debug(`Business Address: ${extractedDetails.businessAddress}`);
-        this.logger.debug(`Token: ${extractedDetails.tokenName} (${extractedDetails.tokenSymbol})`);
-        this.logger.debug(`Blockchain: ${extractedDetails.blockchainName} (${extractedDetails.blockchainSymbol})`);
-        this.logger.debug(`Amount: ${extractedDetails.amount}`);
-        this.logger.debug(`Amount Paid: ${extractedDetails.amountPaid}`);
-        this.logger.debug(`Converted Amount: ${extractedDetails.convertedAmount}`);
-        this.logger.debug(`Converted Gas Fee: ${extractedDetails.convertedGasFee}`);
-        this.logger.debug(`Transaction Hash: ${extractedDetails.hash || 'N/A'}`);
-        this.logger.debug(`Timestamp: ${extractedDetails.timestamp || 'N/A'}`);
-        this.logger.debug(`Wallet ID: ${extractedDetails.walletId || 'N/A'}`);
-      }
+      // Get transaction details using wallet-specific configuration
+      // No fallbacks - we strictly use the wallet configuration based on blockchain and token
+      const transactionData = await this.getTransactionService.getTransactionDetailsWithWalletConfig(
+        transactionId,
+        initialData
+      );
       
+      // Extract fields required for processing
+      const extractedDetails = this.extractTransactionDetails(transactionData, transactionId);
       return extractedDetails;
     } catch (error) {
-      // Handle errors
+      // Log the error and rethrow
       this.logger.error(`Error fetching transaction details: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Extract transaction details from API response
+   * @param transactionData - Raw transaction data from API
+   * @param transactionId - Transaction ID
+   * @returns Extracted transaction details
+   */
+  private extractTransactionDetails(transactionData: any, transactionId: string): any {
+    // Only log for deposit.success
+    if (transactionData.type === 'deposit.success') {
+      this.logger.log(`Processing deposit.success - ID: ${transactionId}, Amount: ${transactionData.amount} ${transactionData.tokenSymbol || transactionData.currency}`);
+    }
+    
+    return {
+      id: transactionId,
+      status: transactionData.status,
+      type: transactionData.type,
+      currency: transactionData.currency,
+      senderAddress: transactionData.senderAddress,
+      recipientAddress: transactionData.recipientAddress,
+      tokenName: transactionData.tokenName,
+      tokenSymbol: transactionData.tokenSymbol,
+      token: transactionData.tokenSymbol || transactionData.currency,
+      blockchainName: transactionData.blockchainName || '',
+      blockchainSymbol: transactionData.blockchainSymbol,
+      blockchain: transactionData.blockchainName || '',
+      amount: transactionData.amount,
+      amountPaid: transactionData.amountPaid,
+      convertedAmount: transactionData.convertedAmount,
+      convertedGasFee: transactionData.convertedGasFee,
+      hash: transactionData.hash || '',
+      timestamp: transactionData.timestamp || new Date().toISOString(),
+      walletId: transactionData.walletId || null
+    };
   }
 
   /**

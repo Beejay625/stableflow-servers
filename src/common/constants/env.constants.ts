@@ -32,9 +32,7 @@ export const PAYCREST_API_KEY = 'PAYCREST_API_KEY';
 export const PAYCREST_BASE_URL = 'PAYCREST_BASE_URL';
 export const NUBAPI_TOKEN = 'NUBAPI_TOKEN';
 
-// BlockRadar API keys and config
-export const BLOCKRADAR_API_KEY = 'BLOCKRADAR_API_KEY';
-export const WALLET_ID = 'WALLET_ID';
+// config network
 export const NETWORK = 'NETWORK';
 
 // Security environment variables
@@ -43,3 +41,11 @@ export const ENCRYPTION_KEY = 'ENCRYPTION_KEY';
 
 // Node environment
 export const NODE_ENV = 'NODE_ENV';
+
+// BEP20 USDT environment variables
+export const BEP20_USDT_API_KEY = 'BEP20_USDT_API_KEY';
+export const BEP20_USDT_WALLET_ID = 'BEP20_USDT_WALLET_ID';
+
+// USDC BASE environment variables
+export const USDC_BASE_API_KEY = 'USDC_BASE_API_KEY';
+export const USDC_BASE_WALLET_ID = 'USDC_BASE_WALLET_ID';

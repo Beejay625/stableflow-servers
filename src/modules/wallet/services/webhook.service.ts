@@ -3,32 +3,38 @@ import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
 import { TransactionQueueService } from '../../queue/services/transaction-queue.service';
 import { RedisService } from '../../redis/redis.service';
+import { WalletConfigService } from '../../../common/utils/wallet-config';
 
 @Injectable()
 export class WebhookService {
   private readonly logger = new Logger(WebhookService.name);
-  private apiKey: string;
   
   constructor(
     private readonly configService: ConfigService,
     private readonly transactionQueueService: TransactionQueueService,
     private readonly redisService: RedisService,
-  ) {
-    // OPTIMIZATION: Cache the API key to avoid repeated config lookups
-    this.apiKey = this.configService.get<string>('blockradar.apiKey');
-  }
+    private readonly walletConfigService: WalletConfigService,
+  ) {}
 
   /**
-   * Validate webhook signature
-   * OPTIMIZED: Uses cached API key for faster validation
+   * Validate webhook signature using the appropriate API key for the wallet
    */
   validateSignature(event: any, signature: string): boolean {
-    if (!this.apiKey || !signature) {
+    if (!signature) {
+      return false;
+    }
+    
+    // Get the wallet-specific configuration
+    const walletConfig = this.walletConfigService.getWalletConfig(event);
+    
+    // If no matching wallet config was found, signature cannot be validated
+    if (!walletConfig || !walletConfig.apiKey) {
+      this.logger.warn(`No matching wallet configuration found, cannot validate signature`);
       return false;
     }
     
     const generatedSignature = crypto
-      .createHmac('sha512', this.apiKey)
+      .createHmac('sha512', walletConfig.apiKey)
       .update(JSON.stringify(event))
       .digest('hex');
       
@@ -37,60 +43,56 @@ export class WebhookService {
 
   /**
    * Extract relevant data from webhook payload
-   * OPTIMIZED: Focused on deposit.success events, minimal extraction
    */
   extractWebhookData(payload: any): { 
     transactionId: string; 
-    businessAddress: string; 
     eventType: string;
-    walletId: string | null;
+    chain: string | null;
   } {
     // Direct access to nested properties with fallbacks
     const data = payload?.data || {};
     
+    // Get blockchain name using the utility function
+    const chain = this.walletConfigService.getBlockchainName(payload);
+    
     // Extract only what's needed for processing with defaults
     return {
       transactionId: data.id || payload.id || '',
-      businessAddress: data.recipient_address || data.recipientAddress || '',
-      eventType: data.event_type || data.eventType || '',
-      walletId: data.wallet?.id || null
+      eventType: data.event_type || data.eventType || payload.event || '',
+      chain: chain || null
     };
   }
 
   /**
    * Process transaction event from Blockradar webhook
-   * OPTIMIZED: Only processes deposit.success events
+   * Only processes deposit.success events with valid wallet configuration
    */
   async processTransactionEvent(payload: any): Promise<void> {
-    // Log the full payload in development only
+    // Log sanitized payload in development mode
     if (process.env.NODE_ENV === 'development') {
-      this.logger.debug('Full webhook payload:', JSON.stringify(payload, null, 2));
+      this.logger.debug(`Full webhook payload: ${JSON.stringify(this.sanitizePayload(payload), null, 2)}`);
     }
     
-    const { transactionId, eventType } = this.extractWebhookData(payload);
+    // CRITICAL: Check FIRST if this is EXACTLY deposit.success event, return early if not
+    if (payload?.event !== 'deposit.success' && payload?.data?.event !== 'deposit.success') {
+      this.logger.log(`Skipping non-deposit.success event: ${payload?.event || payload?.data?.event}`);
+      return;
+    }
+
+    const { transactionId, chain } = this.extractWebhookData(payload);
+    
     if (!transactionId) {
       this.logger.warn('Received webhook payload without transaction ID, skipping processing');
       return;
     }
 
-    // STRICT FILTERING: Only process "deposit.success" events
-    const isDepositSuccessEvent = eventType === 'deposit.success' || 
-                                 (payload?.event === 'deposit.success') ||
-                                 (payload?.data?.event === 'deposit.success');
-    
-    if (!isDepositSuccessEvent) {
-      this.logger.log(`Skipping non-deposit.success event: ${eventType || 'unknown'} for transaction ${transactionId}`);
-      return;
-    }
-
-    this.logger.log(`Processing deposit.success webhook for transaction ${transactionId}`);
+    this.logger.log(`Processing deposit.success webhook for transaction ${transactionId} on chain "${chain}"`);
 
     const client = this.redisService.getClient();
     const idempotencyKey = `idempotency:webhook:${transactionId}`;
     
     try {
-      // OPTIMIZATION: Use a single Redis call to check and set idempotency
-      // This reduces network round trips to Redis
+      // Check and set idempotency key
       const processed = await client.set(idempotencyKey, 'processing', 'EX', 86400, 'NX');
       
       // If key already exists, skip processing

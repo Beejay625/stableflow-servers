@@ -625,7 +625,25 @@ export class BusinessController {
   @Get('banks/verify')
   @ApiOperation({
     summary: 'Verify bank account',
-    description: 'Verify bank account using either bank code or bank name with account number'
+    description: 'Verify bank account using either bank code or bank name with account number. Cannot provide both bank code and bank name.'
+  })
+  @ApiQuery({
+    name: 'bankCode',
+    description: 'Bank code (e.g., "058"). Cannot be used with bankName.',
+    required: false,
+    example: '058'
+  })
+  @ApiQuery({
+    name: 'bankName',
+    description: 'Bank name (e.g., "Access Bank"). Cannot be used with bankCode.',
+    required: false,
+    example: 'Access Bank'
+  })
+  @ApiQuery({
+    name: 'accountNumber',
+    description: 'Account number to verify',
+    required: true,
+    example: '0123456789'
   })
   @ApiResponse({
     status: 200,
@@ -653,13 +671,23 @@ export class BusinessController {
       type: 'object',
       properties: {
         statusCode: { type: 'number', example: 400 },
-        message: { type: 'string', example: 'Account number is required' },
+        message: { type: 'string', example: 'Cannot provide both bank code and bank name. Please choose one.' },
         error: { type: 'string', example: 'Bad Request' }
       }
     }
   })
   async verifyBankAccount(@Query(ValidationPipe) verifyDto: VerifyBankDto): Promise<NubapiResponse> {
-    this.logger.log(`Verifying bank account with ${verifyDto.bankCode ? 'code' : 'name'}`);
+    this.logger.log(`Verifying bank account with parameters: ${JSON.stringify(verifyDto)}`);
+    
+    // Explicitly check if both are provided
+    if (verifyDto.bankCode && verifyDto.bankName) {
+      throw new BadRequestException('Cannot provide both bank code and bank name. Please choose one.');
+    }
+    
+    // Check if neither is provided
+    if (!verifyDto.bankCode && !verifyDto.bankName) {
+      throw new BadRequestException('Either bank code or bank name must be provided.');
+    }
     
     // Use the common bank resolution logic
     const { bankCode: resolvedBankCode } = await this.resolveBankInfo(
@@ -723,7 +751,12 @@ export class BusinessController {
     @Query('bankName') bankName?: string,
     @Query('accountNumber') accountNumber?: string
   ): Promise<NubapiResponse> {
-    this.logger.log(`Legacy endpoint: Verifying bank account with ${bankCode ? 'code' : 'name'}`);
+    this.logger.log(`Legacy endpoint: Verifying bank account with parameters: bank code: ${bankCode}, bank name: ${bankName}`);
+    
+    // Explicitly check if both are provided
+    if (bankCode && bankName) {
+      throw new BadRequestException('Cannot provide both bank code and bank name. Please choose one.');
+    }
     
     // Create a DTO for validation
     const verifyDto = new VerifyBankDto();

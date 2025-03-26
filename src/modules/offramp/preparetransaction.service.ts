@@ -15,15 +15,15 @@ import { TransactionStatus } from '../wallet/constants/status.enum';
 @Injectable()
 export class PrepareTransactionService {
   private readonly logger = new Logger(PrepareTransactionService.name);
-  private readonly network: string;
+  private readonly configNetwork: string;
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
   ) {
-    this.network = mapNetworkFromConfig(configService.get<string>('blockradar.network'));
-    this.logger.log(`PrepareTransactionService initialized for network: ${this.network}`);
+    this.configNetwork = this.configService.get<string>('blockradar.network');
+    this.logger.log(`PrepareTransactionService initialized for network config: ${this.configNetwork}`);
   }
 
   /**
@@ -32,7 +32,7 @@ export class PrepareTransactionService {
    * Steps:
    * 1. Retrieve transaction and associated business data
    * 2. Validate required bank details
-   * 3. Map token symbol to blockchain address
+   * 3. Map token symbol to blockchain address based on chain and network config
    * 4. Format data for offramp processing
    * 
    * @param transactionId - The ID of the transaction to process
@@ -71,16 +71,20 @@ export class PrepareTransactionService {
         `);
       }
 
-      // Step 3: Get token address from token symbol
-      const tokenAddress = getTokenAddress(this.network, transaction.token);
+      // Step 3: Map network based on config and transaction chain
+      const network = mapNetworkFromConfig(this.configNetwork, transaction.chain);
+      this.logger.log(`Mapped network ${network} for chain ${transaction.chain} with config ${this.configNetwork}`);
+
+      // Step 4: Get token address from token symbol
+      const tokenAddress = getTokenAddress(network, transaction.token);
       if (!tokenAddress) {
-        throw new Error(`Token address not found for ${transaction.token} on network ${this.network}`);
+        throw new Error(`Token address not found for ${transaction.token} on network ${network}`);
       }
 
-      // Step 4: Format data for offramp processing
+      // Step 5: Format data for offramp processing
       const currency = bankDetails.bankCode.startsWith('0') ? 'NGN' : 'KES';
       
-      // Step 5: Return properly formatted transaction
+      // Step 6: Return properly formatted transaction
       return {
         id: transaction.transactionId,
         senderAddress: transaction.businessAddress,
@@ -95,7 +99,7 @@ export class PrepareTransactionService {
         rate: 0, // Rate will be determined by the offramp provider
         refundAddress: transaction.businessAddress,
         status: TransactionStatus.PENDING,
-        network: this.network,
+        network,
         memo: `Offramp for transaction ${transaction.transactionId}`
       };
     } catch (error) {

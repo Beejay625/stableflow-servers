@@ -16,4 +16,7 @@ export {
   formatQueryParams,
   handleAxiosError as httpHandleAxiosError,
   retryWithBackoff as httpRetryWithBackoff 
-} from './http.util'; 
+} from './http.util';
+
+// Wallet configuration utility
+export { WalletConfigService, WalletConfigData } from './wallet-config'; 

@@ -13,7 +13,8 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Res,
-  SetMetadata
+  SetMetadata,
+  Logger
 } from '@nestjs/common';
 import { ApiOperation, ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WebhookService } from './services/webhook.service';
@@ -23,15 +24,16 @@ import { SortTransactionService } from './services/sort.transaction.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Request, Response } from 'express';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Transaction } from './entities/transaction.entity';
 import { TransactionStatus } from './constants/status.enum';
 import { MoreThanOrEqual } from 'typeorm';
 import { Public } from '../../common/decorators/public.decorator';
-import { Logger } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { Business } from '../business/entities/business.entity';
+import { RedisService } from '../redis/redis.service';
+import { QueueService } from '../queue/queue.service';
+import { WalletConfigService } from '../../common/utils/wallet-config';
 import { OfframpService } from '../offramp/offramp.service';
-
 
 /**
  * Controller for wallet-related functionality
@@ -48,9 +50,14 @@ export class WalletController {
     private readonly transactionQueue: TransactionQueueService,
     private readonly getTransactionService: GetTransactionService,
     private readonly sortTransactionService: SortTransactionService,
+    private readonly redisService: RedisService,
+    private readonly queueService: QueueService,
+    private readonly walletConfigService: WalletConfigService,
+    private readonly dataSource: DataSource,
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly dataSource: DataSource,
+    @InjectRepository(Business)
+    private readonly businessRepository: Repository<Business>,
     private readonly offrampService: OfframpService
   ) {}
 
@@ -81,111 +88,85 @@ export class WalletController {
   @SetMetadata('custom_response', true)
   async handleBlockradarWebhook(@Body() payload: any, @Res() res: Response) {
     try {
-      // Log the full payload structure first
-      this.logger.log(`Webhook payload received: ${JSON.stringify(payload, null, 2)}`);
-      
-      // CRITICAL OPTIMIZATION:
-      // 1. Check FIRST if this is a deposit.success event, return early if not
-      if (payload?.event !== 'deposit.success') {
-        this.logger.log(`Received non-deposit.success event, skipping...`);
-        return res.status(200).send({
-          status: 'skipped',
-          reason: 'non-deposit.success event'
-        });
+      // Quick return for non-deposit.success events
+      if (payload?.event !== 'deposit.success' && payload?.data?.event !== 'deposit.success') {
+        return res.status(200).send();
       }
 
-      // 2. Extract only necessary data after confirming it's a deposit.success event
       const transactionId = payload.data?.id;
-      const businessAddress = payload.data?.recipientAddress;
-      const senderAddress = payload.data?.senderAddress;
-      const walletId = payload.data?.wallet?.id;
+      const recipientAddress = payload.data?.recipientAddress;
       
-      this.logger.log(`Processing transaction ID: ${transactionId}`);
-      
-      // 3. Check for required fields
-      if (!transactionId) {
-        this.logger.error('Missing transaction ID in webhook payload');
-        return res.status(200).send({
-          status: 'error',
-          message: 'Missing transaction ID'
-        });
+      if (!transactionId || !recipientAddress) {
+        return res.status(200).send();
       }
 
-      // 4. Efficient duplicate check - check DB BEFORE any further processing
-      const existingTx = await this.transactionRepository.findOne({
-        where: { transactionId },
-        select: ['id'] // Only select ID field for efficiency
+      // Start transaction
+      await this.dataSource.transaction(async (transactionalEntityManager) => {
+        // Check for duplicate using transactionId as idempotency key
+        const existingTx = await transactionalEntityManager
+          .getRepository(Transaction)
+          .findOne({
+            where: { transactionId },
+            select: ['id', 'status']
+          });
+
+        if (existingTx) {
+          // If exists and Unsettled, ensure it's in Redis queue
+          if (existingTx.status === TransactionStatus.UNSETTLED) {
+            const isInQueue = await this.redisService.get(`tx:${transactionId}`);
+            if (!isInQueue) {
+              await this.queueService.addToQueue('transactions', {
+                transactionId,
+                status: TransactionStatus.UNSETTLED
+              });
+              await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
+            }
+          }
+          return;
+        }
+
+        // Find business by recipient address (which is the wallet address)
+        const business = await transactionalEntityManager
+          .getRepository(Business)
+          .findOne({
+            where: { walletAddress: recipientAddress }
+          });
+
+        if (!business) {
+          this.logger.warn(`No business found for recipient address ${recipientAddress}`);
+          return;
+        }
+
+        // Save transaction with Unsettled status
+        const transaction = await transactionalEntityManager
+          .getRepository(Transaction)
+          .save({
+            transactionId,
+            businessId: business.id,
+            tokenAmount: parseFloat(payload.data.amount),
+            token: payload.data.asset?.symbol || payload.data.currency,
+            chain: this.walletConfigService.getBlockchainName(payload),
+            status: TransactionStatus.UNSETTLED,
+            senderAddress: payload.data.senderAddress || 'unknown',
+            businessAddress: recipientAddress,
+            metadata: payload.data,
+            receivedAt: new Date()
+          });
+
+        // Add to queue and Redis after successful save
+        await this.queueService.addToQueue('transactions', {
+          transactionId: transaction.id,
+          status: TransactionStatus.UNSETTLED
+        });
+        await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
+        
+        this.logger.log(`Transaction ${transactionId} saved and queued`);
       });
 
-      if (existingTx) {
-        this.logger.log(`Duplicate transaction ${transactionId} received, skipping`);
-        return res.status(200).send({
-          status: 'success',
-          message: 'Transaction already processed'
-        });
-      }
-
-      // 5. Process the legitimate new transaction
-      if (!businessAddress) {
-        this.logger.warn(`No business address found for transaction ${transactionId}`);
-        return res.status(200).send({
-          status: 'error',
-          message: 'No business address found',
-          transactionId
-        });
-      }
-      
-      // Fetch transaction details
-      const transactionData = await this.sortTransactionService
-        .fetchTransactionDetails(transactionId);
-      
-      // Find the business for this transaction
-      const business = await this.sortTransactionService
-        .findBusinessForTransaction(transactionData);
-
-      if (!business) {
-        this.logger.warn(`No business found for transaction ${transactionId}`);
-        return res.status(200).send({
-          status: 'error',
-          message: 'No business found for transaction',
-          transactionId
-        });
-      }
-      
-      // Save the transaction to the database
-      await this.sortTransactionService.saveTransactionToBusiness(
-        transactionId,
-        business,
-        payload.data.amount,
-        payload.data.asset?.symbol || payload.data.currency,
-        payload.data.blockchain?.name || payload.data.network,
-        businessAddress,
-        business.addressId,
-        payload.data,
-        senderAddress,
-        walletId,
-      );
-      
-      // Process the transaction through offramp
-      await this.offrampService.processTransaction(transactionId);
-      this.logger.log(`Transaction ${transactionId} processed successfully`);
-      
-      return res.status(200).send({
-        status: 'success',
-        message: 'Transaction processed successfully',
-        transactionId
-      });
+      return res.status(200).send();
     } catch (error) {
-      this.logger.error(
-        `Error processing Blockradar webhook: ${error.message}`,
-        error.stack
-      );
-      
-      // Always return 200 to prevent webhook retries
-      return res.status(200).send({
-        status: 'error',
-        message: 'Error processing webhook, but acknowledged'
-      });
+      this.logger.error(`Error processing transaction: ${error.message}`);
+      return res.status(200).send();
     }
   }
 

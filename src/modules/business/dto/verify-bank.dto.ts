@@ -8,7 +8,7 @@ import { Type } from 'class-transformer';
  */
 export class VerifyBankDto {
   @ApiProperty({
-    description: 'Bank code from valid Nigerian banks list',
+    description: 'Bank code from valid Nigerian banks list (cannot be used with bankName)',
     example: '058',
     required: false
   })
@@ -19,7 +19,7 @@ export class VerifyBankDto {
   bankCode?: string;
 
   @ApiProperty({
-    description: 'Bank name from valid Nigerian banks list',
+    description: 'Bank name from valid Nigerian banks list (cannot be used with bankCode)',
     example: 'Access Bank',
     required: false
   })
@@ -37,4 +37,14 @@ export class VerifyBankDto {
   @IsString()
   @IsNotEmpty({ message: 'Account number is required' })
   accountNumber: string;
+
+  /**
+   * Validates that bankCode and bankName aren't provided simultaneously
+   */
+  validateBankExclusivity?(): boolean {
+    if (this.bankCode && this.bankName) {
+      return false;
+    }
+    return true;
+  }
 } 
