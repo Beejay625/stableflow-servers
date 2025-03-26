@@ -20,7 +20,6 @@ import { RedisModule } from '../redis/redis.module';
 import { TransactionRepository } from './repositories/transaction.repository';
 import { MailService } from '../../common/utils/email';
 import { CommonModule } from '../../common/common.module';
-import { TransactionRecoveryService } from './services/transaction-recovery.service';
 import { OfframpModule } from '../offramp/offramp.module';
 import { WalletConfigService } from '../../common/utils/wallet-config';
 
@@ -61,7 +60,6 @@ import { WalletConfigService } from '../../common/utils/wallet-config';
     WebhookService,
     TransactionRepository,
     MailService,
-    TransactionRecoveryService,
     WalletConfigService,
   ],
   exports: [

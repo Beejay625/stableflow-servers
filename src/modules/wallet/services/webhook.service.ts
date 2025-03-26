@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as crypto from 'crypto';
-import { TransactionQueueService } from '../../queue/services/transaction-queue.service';
 import { RedisService } from '../../redis/redis.service';
 import { WalletConfigService } from '../../../common/utils/wallet-config';
 
@@ -11,7 +10,6 @@ export class WebhookService {
   
   constructor(
     private readonly configService: ConfigService,
-    private readonly transactionQueueService: TransactionQueueService,
     private readonly redisService: RedisService,
     private readonly walletConfigService: WalletConfigService,
   ) {}
@@ -64,60 +62,28 @@ export class WebhookService {
   }
 
   /**
-   * Process transaction event from Blockradar webhook
-   * Only processes deposit.success events with valid wallet configuration
+   * Checks if a webhook has already been processed using Redis
+   * @param transactionId - The transaction ID to check
+   * @returns Promise<boolean> - Whether the webhook has been processed
    */
-  async processTransactionEvent(payload: any): Promise<void> {
-    // Log sanitized payload in development mode
-    if (process.env.NODE_ENV === 'development') {
-      this.logger.debug(`Full webhook payload: ${JSON.stringify(this.sanitizePayload(payload), null, 2)}`);
-    }
-    
-    // CRITICAL: Check FIRST if this is EXACTLY deposit.success event, return early if not
-    if (payload?.event !== 'deposit.success' && payload?.data?.event !== 'deposit.success') {
-      this.logger.log(`Skipping non-deposit.success event: ${payload?.event || payload?.data?.event}`);
-      return;
-    }
-
-    const { transactionId, chain } = this.extractWebhookData(payload);
-    
-    if (!transactionId) {
-      this.logger.warn('Received webhook payload without transaction ID, skipping processing');
-      return;
-    }
-
-    this.logger.log(`Processing deposit.success webhook for transaction ${transactionId} on chain "${chain}"`);
-
+  async isWebhookProcessed(transactionId: string): Promise<boolean> {
     const client = this.redisService.getClient();
     const idempotencyKey = `idempotency:webhook:${transactionId}`;
-    
-    try {
-      // Check and set idempotency key
-      const processed = await client.set(idempotencyKey, 'processing', 'EX', 86400, 'NX');
-      
-      // If key already exists, skip processing
-      if (!processed) {
-        this.logger.warn(`Duplicate webhook for transaction ${transactionId} detected, already processed`);
-        return;
-      }
-
-      // Queue the transaction
-      const queued = await this.transactionQueueService.queueTransaction(transactionId);
-      
-      if (!queued) {
-        this.logger.debug(`Transaction ${transactionId} already in queue, skipped`);
-      }
-      
-      // Update idempotency key to completed state
-      await client.set(idempotencyKey, 'completed', 'EX', 86400);
-      this.logger.log(`Deposit transaction ${transactionId} webhook processed successfully`);
-    } catch (error) {
-      this.logger.error(`Error processing webhook for transaction ${transactionId}: ${error.message}`, error.stack);
-      // On error, mark as failed but don't rethrow (allows webhook to be acknowledged)
-      await client.set(idempotencyKey, `error:${error.message}`, 'EX', 86400);
-    }
+    const status = await client.get(idempotencyKey);
+    return !!status;
   }
-  
+
+  /**
+   * Mark webhook as processed in Redis
+   * @param transactionId - The transaction ID to mark
+   * @param status - The processing status (processing, completed, error)
+   */
+  async markWebhookProcessed(transactionId: string, status: string = 'completed'): Promise<void> {
+    const client = this.redisService.getClient();
+    const idempotencyKey = `idempotency:webhook:${transactionId}`;
+    await client.set(idempotencyKey, status, 'EX', 86400); // 24 hours expiry
+  }
+
   /**
    * Sanitizes the payload for logging by removing sensitive fields
    */

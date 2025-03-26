@@ -5,6 +5,7 @@ import { envConfig, databaseConfig } from './config';
 import { AuthModule, RedisModule, QueueModule, PaycrestModule } from './modules';
 import { BusinessModule } from './modules/business/business.module';
 import { WalletModule } from './modules/wallet/wallet.module';
+import { OfframpModule } from './modules/offramp/offramp.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './common/guards';
 import { JwtModule } from '@nestjs/jwt';
@@ -26,6 +27,7 @@ import { JwtModule } from '@nestjs/jwt';
     QueueModule,
     PaycrestModule,
     WalletModule,
+    OfframpModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({

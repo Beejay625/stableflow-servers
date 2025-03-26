@@ -115,7 +115,7 @@ export class WalletController {
           if (existingTx.status === TransactionStatus.UNSETTLED) {
             const isInQueue = await this.redisService.get(`tx:${transactionId}`);
             if (!isInQueue) {
-              await this.queueService.addToQueue('transactions', {
+              await this.queueService.addToQueue('transaction-processing', {
                 transactionId,
                 status: TransactionStatus.UNSETTLED
               });
@@ -154,7 +154,7 @@ export class WalletController {
           });
 
         // Add to queue and Redis after successful save
-        await this.queueService.addToQueue('transactions', {
+        await this.queueService.addToQueue('transaction-processing', {
           transactionId: transaction.id,
           status: TransactionStatus.UNSETTLED
         });

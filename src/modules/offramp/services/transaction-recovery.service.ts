@@ -2,10 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { LessThan, Repository } from 'typeorm';
-import { Transaction } from '../entities/transaction.entity';
-import { TransactionStatus } from '../constants/status.enum';
-import { TransactionQueueService } from '../../queue/services/transaction-queue.service';
+import { Transaction } from '../../wallet/entities/transaction.entity';
+import { TransactionStatus } from '../../wallet/constants/status.enum';
 import { ConfigService } from '@nestjs/config';
+import { QueueService } from '../../queue/queue.service';
+import { RedisService } from '../../redis/redis.service';
+import { OfframpService } from '../offramp.service';
+import { ethers } from 'ethers';
 
 /**
  * Service responsible for recovering any UNSETTLED transactions that
@@ -20,14 +23,16 @@ export class TransactionRecoveryService {
   private readonly logger = new Logger(TransactionRecoveryService.name);
   private readonly recoveryAgeMinutes: number;
   private readonly isProduction: boolean;
+  private readonly provider: ethers.JsonRpcProvider;
 
   constructor(
     @InjectRepository(Transaction)
     private readonly transactionRepository: Repository<Transaction>,
-    private readonly transactionQueue: TransactionQueueService,
+    private readonly queueService: QueueService,
+    private readonly redisService: RedisService,
+    private readonly offrampService: OfframpService,
     private readonly configService: ConfigService,
   ) {
-    // Time threshold before attempting recovery (default: 10 minutes)
     this.recoveryAgeMinutes = parseInt(
       this.configService.get<string>('TRANSACTION_RECOVERY_AGE_MINUTES', '10'),
       10
@@ -35,25 +40,22 @@ export class TransactionRecoveryService {
     
     this.isProduction = this.configService.get<string>('NODE_ENV') === 'production';
     
+    const rpcUrl = this.configService.get<string>('BASE_RPC_URL');
+    this.provider = new ethers.JsonRpcProvider(rpcUrl);
+    
     this.logger.log(
       `Transaction recovery service initialized. Will recover transactions older than ${this.recoveryAgeMinutes} minutes.`
     );
   }
 
-  /**
-   * Runs every 30 minutes to check for UNSETTLED transactions that weren't
-   * properly queued, and adds them to the processing queue.
-   */
   @Cron(CronExpression.EVERY_30_MINUTES)
   async recoverUnprocessedTransactions() {
     this.logger.log('Starting recovery scan for unprocessed transactions...');
     
     try {
-      // Calculate cutoff time (e.g., transactions older than 10 minutes)
       const cutoffTime = new Date();
       cutoffTime.setMinutes(cutoffTime.getMinutes() - this.recoveryAgeMinutes);
       
-      // Find UNSETTLED transactions older than the cutoff time
       const unprocessedTransactions = await this.transactionRepository.find({
         where: {
           status: TransactionStatus.UNSETTLED,
@@ -69,18 +71,20 @@ export class TransactionRecoveryService {
       
       this.logger.log(`Found ${unprocessedTransactions.length} potential transactions to recover.`);
       
-      // Track recovery metrics
       let recoveredCount = 0;
       let alreadyQueuedCount = 0;
       
-      // Process each unprocessed transaction
       for (const tx of unprocessedTransactions) {
-        // Check if transaction is already in the queue
-        const isQueued = await this.transactionQueue.isTransactionQueued(tx.transactionId);
+        const isQueued = await this.redisService.get(`tx:${tx.transactionId}`);
         
         if (!isQueued) {
-          // Add to queue if not already queued
-          await this.transactionQueue.queueTransaction(tx.transactionId);
+          await this.queueService.addToQueue('transaction-processing', {
+            transactionId: tx.transactionId,
+            status: TransactionStatus.UNSETTLED
+          });
+          
+          await this.redisService.setKey(`tx:${tx.transactionId}`, 'queued');
+          
           this.logger.log(
             `Recovered transaction ${tx.transactionId} received at ${tx.receivedAt.toISOString()}`
           );
@@ -91,7 +95,6 @@ export class TransactionRecoveryService {
         }
       }
       
-      // Log recovery summary
       this.logger.log(
         `Recovery scan complete. Recovered: ${recoveredCount}, Already queued: ${alreadyQueuedCount}`
       );
@@ -101,11 +104,49 @@ export class TransactionRecoveryService {
     }
   }
 
-  /**
-   * Manual recovery method for explicit recovery calls (e.g., from admin endpoints)
-   * @param olderThanMinutes - Override the default age threshold
-   * @returns Summary of recovery operations
-   */
+  @Cron(CronExpression.EVERY_30_MINUTES)
+  async checkStalledTransactions(): Promise<void> {
+    try {
+      this.logger.log('Checking for stalled transactions');
+
+      const timeThreshold = new Date();
+      timeThreshold.setMinutes(timeThreshold.getMinutes() - 15);
+
+      const stalledTransactions = await this.transactionRepository
+        .createQueryBuilder('transaction')
+        .where('transaction.status = :status', { status: TransactionStatus.UNSETTLED })
+        .andWhere('transaction.receivedAt < :threshold', { threshold: timeThreshold })
+        .andWhere("transaction.metadata->>'offramp' IS NOT NULL")
+        .andWhere("transaction.metadata->'offramp'->>'txHash' IS NOT NULL")
+        .getMany();
+
+      if (stalledTransactions.length === 0) {
+        this.logger.log('No stalled transactions found');
+        return;
+      }
+
+      this.logger.log(`Found ${stalledTransactions.length} potentially stalled transactions`);
+      
+      for (const transaction of stalledTransactions) {
+        try {
+          const result = await this.offrampService.checkAndRecoverTransaction(transaction.id);
+          
+          if (result.recovered) {
+            this.logger.log(`Successfully recovered stalled transaction ${transaction.id}`);
+          } else if (result.status === 'pending_confirmation') {
+            this.logger.debug(`Transaction ${transaction.id} is still pending confirmation`);
+          } else {
+            this.logger.warn(`Could not recover transaction ${transaction.id}: ${result.message}`);
+          }
+        } catch (error) {
+          this.logger.error(`Error processing stalled transaction ${transaction.id}: ${error.message}`, error.stack);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error checking stalled transactions: ${error.message}`, error.stack);
+    }
+  }
+
   async manualRecovery(olderThanMinutes: number = this.recoveryAgeMinutes) {
     this.logger.log(`Manual recovery triggered for transactions older than ${olderThanMinutes} minutes.`);
     
@@ -123,10 +164,15 @@ export class TransactionRecoveryService {
     let alreadyQueued = 0;
     
     for (const tx of unprocessedTransactions) {
-      const isQueued = await this.transactionQueue.isTransactionQueued(tx.transactionId);
+      const isQueued = await this.redisService.get(`tx:${tx.transactionId}`);
       
       if (!isQueued) {
-        await this.transactionQueue.queueTransaction(tx.transactionId);
+        await this.queueService.addToQueue('transaction-processing', {
+          transactionId: tx.transactionId,
+          status: TransactionStatus.UNSETTLED
+        });
+        
+        await this.redisService.setKey(`tx:${tx.transactionId}`, 'queued');
         recovered++;
       } else {
         alreadyQueued++;
