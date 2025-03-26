@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
+import { Response as ExpressResponse } from 'express';
+import { Readable } from 'stream';
 
 export interface Response<T> {
   statusCode: number;
@@ -25,18 +27,37 @@ export class TransformInterceptor<T>
     next: CallHandler,
   ): Observable<Response<T>> {
     const ctx = context.switchToHttp();
-    const response = ctx.getResponse();
+    const response = ctx.getResponse<ExpressResponse>();
     const statusCode = response.statusCode;
     const path = ctx.getRequest().path;
 
+    // Skip transformation for responses that use @Res()
+    const handler = context.getHandler();
+    const isCustomResponse = Reflect.getMetadata('custom_response', handler);
+    if (isCustomResponse) {
+      this.logger.log(`Skipping transformation for custom response path: ${path}`);
+      return next.handle();
+    }
+
     return next.handle().pipe(
       map(data => {
-        this.logger.debug(`Transforming response for path: ${path}`);
-        this.logger.debug(`Original data: ${JSON.stringify(data)}`);
+        this.logger.log(`Transforming response for path: ${path}`);
+        
+        // Skip stringification for debugging if data is complex
+        if (this.isComplexObject(data)) {
+          this.logger.log('Complex object detected, skipping detailed logging');
+        } else {
+          try {
+            if (process.env.NODE_ENV === 'development') {
+              this.logger.log(`Original data: ${JSON.stringify(data)}`);
+            }
+          } catch (e) {
+            this.logger.warn('Could not stringify original data');
+          }
+        }
         
         // If data already has a specific structure, maintain it
         if (data && typeof data === 'object' && 'data' in data && 'message' in data) {
-          this.logger.debug('Data already has a specific structure, maintaining it');
           return {
             statusCode,
             ...data,
@@ -44,15 +65,33 @@ export class TransformInterceptor<T>
         }
 
         // Standard transformation
-        const transformedData = {
+        return {
           statusCode,
           message: 'Success',
           data,
         };
-        
-        this.logger.debug(`Transformed data: ${JSON.stringify(transformedData)}`);
-        return transformedData;
       }),
     );
+  }
+
+  private isComplexObject(obj: any): boolean {
+    if (!obj || typeof obj !== 'object') return false;
+    
+    // Check for Express Response
+    if ('status' in obj && 'send' in obj && typeof obj.send === 'function') {
+      return true;
+    }
+    
+    // Check for Buffer
+    if (Buffer.isBuffer(obj)) {
+      return true;
+    }
+    
+    // Check for Stream
+    if (obj instanceof Readable) {
+      return true;
+    }
+    
+    return false;
   }
 } 

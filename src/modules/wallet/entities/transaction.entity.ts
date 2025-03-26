@@ -95,14 +95,4 @@ export class Transaction {
   @Index()
   businessId: string;
 
-  // Commenting out the entire offramp relationship as it's still in skeleton form
-  /*
-  @ManyToOne(
-    () => OfframpAttempt,
-    (offrampAttempt) => offrampAttempt.transactions,
-    { nullable: true },
-  )
-  @JoinColumn({ name: 'offrampOrderId', referencedColumnName: 'orderId' })
-  offrampAttempt: OfframpAttempt;
-  */
-} 
+}

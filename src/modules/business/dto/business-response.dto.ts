@@ -118,4 +118,20 @@ export class BusinessResponseDto {
   
   @ApiProperty({ description: 'Wallet details if a wallet was just generated', required: false })
   walletDetails?: WalletDetailsDto;
+
+  @ApiProperty({ 
+    description: 'Fields that were updated in this request', 
+    type: [String],
+    required: false,
+    example: ['name', 'phoneNumber']
+  })
+  updatedFields?: string[];
+  
+  @ApiProperty({
+    description: 'Previous values of the fields that were updated',
+    type: Object,
+    required: false,
+    example: { name: 'Old Name', phoneNumber: '+1234567890' }
+  })
+  previousValues?: Record<string, any>;
 } 

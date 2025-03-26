@@ -71,7 +71,6 @@ describe('BusinessController', () => {
   const linkBankDto: LinkBankDto = {
     bankCode: '044',
     accountNumber: '1234567890',
-    accountName: 'Test Account',
     accountType: AccountType.POS,
   };
 
@@ -311,49 +310,21 @@ describe('BusinessController', () => {
       // ... test implementation ...
     });
 
-    it('should update a business with minimal data', async () => {
+    it('should update business with minimal updates', async () => {
+      // Should update business with minimal data (just a name)
       const req = { user: { id: mockOwnerId } };
-      const minimalDto: BusinessDto = { 
-        name: 'Updated Business Name'
-      };
+      const minimalDto: BusinessDto = { name: 'New Business Name' };
       
-      // Create a properly structured response
-      const mockResponseData = {
-        Business_id: mockBusinessId,
-        name: minimalDto.name,
-        phoneNumber: null,
-        onboardingStep: OnboardingStep.BUSINESS_SETUP,
-        business_status: 'ACTIVE',
-        category: null,
-        user_Id: mockOwnerId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        bankDetails: {
-          bankCode: null,
-          bankName: null,
-          accountNumber: null,
-          accountName: null,
-          accountType: null,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        }
-      };
-      
-      const mockResponse = {
+      mockBusinessService.updateBusiness.mockResolvedValue({
         statusCode: 200,
-        message: 'Success',
-        data: mockResponseData
-      };
-      
-      mockBusinessService.updateBusiness.mockResolvedValueOnce(mockResponse);
+        message: 'Business updated successfully',
+        data: { ...simplifiedBusiness, name: minimalDto.name }
+      });
       
       const result = await controller.updateBusiness(
         req,
         mockBusinessId,
-        minimalDto.name,
-        undefined, // phoneNumber
-        undefined, // categoryId
-        undefined, // categoryName
+        minimalDto
       );
       
       expect(result.data.name).toEqual(minimalDto.name);
@@ -366,25 +337,24 @@ describe('BusinessController', () => {
 
     it('should extract owner ID from request', async () => {
       const req = { user: { id: mockOwnerId } };
-      const name = 'Updated Business';
+      const updateDto: BusinessDto = { name: 'Updated Business' };
       
       await controller.updateBusiness(
         req,
         mockBusinessId,
-        name,
-       // settlementCurrency
+        updateDto
       );
       
       expect(service.updateBusiness).toHaveBeenCalledWith(
         mockBusinessId,
         mockOwnerId,
-        expect.objectContaining({ name })
+        expect.objectContaining({ name: updateDto.name })
       );
     });
 
     it('should throw NotFoundException when business not found', async () => {
       const req = { user: { id: mockOwnerId } };
-      const name = 'Updated Business';
+      const updateDto: BusinessDto = { name: 'Updated Business' };
       
       mockBusinessService.updateBusiness.mockRejectedValueOnce(
         new NotFoundException(`Business with ID non-existent-id not found`)
@@ -394,10 +364,7 @@ describe('BusinessController', () => {
         controller.updateBusiness(
           req,
           'non-existent-id',
-          name,
-          undefined, // phoneNumber
-          undefined, // categoryId
-          undefined, // categoryName
+          updateDto
         )
       ).rejects.toThrow(NotFoundException);
     });
@@ -445,13 +412,15 @@ describe('BusinessController', () => {
       });
       
       // Act - pass empty values for fields
+      const emptyUpdateDto: BusinessDto = {
+        name: '',
+        phoneNumber: ''
+      };
+      
       const result = await controller.updateBusiness(
         req,
         mockBusinessId,
-        '',               // empty name
-        '',               // empty phoneNumber
-        undefined,        // undefined categoryId 
-        undefined         // undefined categoryName
+        emptyUpdateDto
       );
       
       // Assert
@@ -719,10 +688,11 @@ describe('BusinessController', () => {
       // Act - attempt to update with empty values
       const result = await controller.updateBankAccount(
         mockBusinessId,
-        '044',      // provide a valid bankName (since controller requires either bankName or bankCode)
-        '',         // empty bankCode
-        '0000000000', // provide a valid accountNumber (since controller requires an accountNumber)
-        AccountType.POS,  // provide a valid accountType (since controller requires an accountType)
+        {
+          bankCode: '044',
+          accountNumber: '0000000000',
+          accountType: AccountType.POS
+        },
         req
       );
       

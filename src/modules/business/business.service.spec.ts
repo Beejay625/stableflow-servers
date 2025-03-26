@@ -9,6 +9,7 @@ import { Category } from './entities/category.entity';
 import { BusinessDto } from './dto/update-business.dto';
 import { PaycrestService } from '../paycrest/paycrest.service';
 import { WalletService } from '../wallet/wallet.service';
+import { BusinessResponseDto } from './dto/business-response.dto';
 
 describe('BusinessService', () => {
   let service: BusinessService;
@@ -95,8 +96,8 @@ describe('BusinessService', () => {
     jest.clearAllMocks();
   });
 
-  describe('updateBusinessEntity', () => {
-    it('should update business with valid data', async () => {
+  describe('updateBusiness', () => {
+    it('should update business with category by ID', async () => {
       const businessId = 'test-id';
       const ownerId = 'owner-id';
       const businessDto: BusinessDto = {
@@ -112,13 +113,13 @@ describe('BusinessService', () => {
         phoneNumber: '+1234567890',
         onboardingStep: OnboardingStep.NOT_STARTED
       } as Business;
-      
-      const category = {
-        id: businessDto.categoryId,
+
+      const category = { 
+        id: businessDto.categoryId, 
         name: 'Test Category'
       } as Category;
 
-      const updatedBusiness = { 
+      const updatedBusiness = {
         ...existingBusiness,
         ...businessDto,
         category,
@@ -129,24 +130,34 @@ describe('BusinessService', () => {
       categoryRepo.findOne.mockResolvedValueOnce(category);
       businessRepo.save.mockResolvedValueOnce(updatedBusiness);
 
-      const result = await service.updateBusinessEntity(businessId, businessDto, ownerId);
+      const mockValidateAndGetBusiness = jest.spyOn(service as any, 'validateAndGetBusiness');
+      mockValidateAndGetBusiness.mockResolvedValueOnce(existingBusiness);
 
-      expect(result).toEqual(updatedBusiness);
-      expect(businessRepo.findOne).toHaveBeenCalledWith({
-        where: { id: businessId, ownerId }
-      });
-      expect(categoryRepo.findOne).toHaveBeenCalledWith({
-        where: [
-          { id: businessDto.categoryId, isCustom: false },
-          { id: businessDto.categoryId, isCustom: true, ownerId }
-        ]
-      });
-      expect(businessRepo.save).toHaveBeenCalledWith(expect.objectContaining({
-        ...existingBusiness,
-        ...businessDto,
-        category,
-        onboardingStep: OnboardingStep.BUSINESS_SETUP
-      }));
+      const mockToSimplifiedResponse = jest.spyOn(service as any, 'toSimplifiedResponse');
+      const simplifiedBusinessData = {
+        Business_id: businessId,
+        name: updatedBusiness.name,
+        phoneNumber: updatedBusiness.phoneNumber,
+        onboardingStep: updatedBusiness.onboardingStep,
+        business_status: 'ACTIVE',
+        user_Id: ownerId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        category: updatedBusiness.category
+      };
+      mockToSimplifiedResponse.mockReturnValueOnce(simplifiedBusinessData);
+      
+      const businessResponseDto = new BusinessResponseDto();
+      businessResponseDto.statusCode = 200;
+      businessResponseDto.message = 'Business updated successfully';
+      businessResponseDto.data = simplifiedBusinessData;
+
+      const result = await service.updateBusiness(businessId, ownerId, businessDto);
+
+      expect(result.statusCode).toEqual(200);
+      expect(result.data).toEqual(simplifiedBusinessData);
+      expect(mockValidateAndGetBusiness).toHaveBeenCalledWith(businessId, ownerId);
+      expect(businessRepo.save).toHaveBeenCalled();
     });
 
     it('should handle custom category creation', async () => {
@@ -181,15 +192,35 @@ describe('BusinessService', () => {
         onboardingStep: OnboardingStep.BUSINESS_SETUP
       };
 
-      businessRepo.findOne.mockResolvedValueOnce(existingBusiness);
+      const mockValidateAndGetBusiness = jest.spyOn(service as any, 'validateAndGetBusiness');
+      mockValidateAndGetBusiness.mockResolvedValueOnce(existingBusiness);
+
       categoryRepo.findOne.mockResolvedValueOnce(null);
-      categoryRepo.create.mockReturnValueOnce(newCategory);
       categoryRepo.save.mockResolvedValueOnce(newCategory);
       businessRepo.save.mockResolvedValueOnce(updatedBusiness);
 
-      const result = await service.updateBusinessEntity(businessId, businessDto, ownerId);
+      const mockToSimplifiedResponse = jest.spyOn(service as any, 'toSimplifiedResponse');
+      const simplifiedBusinessData = {
+        Business_id: businessId,
+        name: updatedBusiness.name,
+        phoneNumber: updatedBusiness.phoneNumber,
+        onboardingStep: updatedBusiness.onboardingStep,
+        business_status: 'ACTIVE',
+        user_Id: ownerId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        category: updatedBusiness.category
+      };
+      mockToSimplifiedResponse.mockReturnValueOnce(simplifiedBusinessData);
 
-      expect(result).toEqual(updatedBusiness);
+      const businessResponseDto = new BusinessResponseDto();
+      businessResponseDto.statusCode = 200;
+      businessResponseDto.message = 'Business updated successfully';
+      businessResponseDto.data = simplifiedBusinessData;
+
+      const result = await service.updateBusiness(businessId, ownerId, businessDto);
+
+      expect(result.data).toEqual(simplifiedBusinessData);
     });
 
     it('should throw NotFoundException when business not found', async () => {
@@ -201,10 +232,11 @@ describe('BusinessService', () => {
         categoryId: 'category-id'
       };
 
-      businessRepo.findOne.mockResolvedValueOnce(null);
+      const mockValidateAndGetBusiness = jest.spyOn(service as any, 'validateAndGetBusiness');
+      mockValidateAndGetBusiness.mockRejectedValueOnce(new NotFoundException(`Business with ID ${businessId} not found`));
 
       await expect(
-        service.updateBusinessEntity(businessId, businessDto, ownerId)
+        service.updateBusiness(businessId, ownerId, businessDto)
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -225,12 +257,14 @@ describe('BusinessService', () => {
         onboardingStep: OnboardingStep.NOT_STARTED
       } as Business;
 
-      businessRepo.findOne.mockResolvedValueOnce(existingBusiness);
+      const mockValidateAndGetBusiness = jest.spyOn(service as any, 'validateAndGetBusiness');
+      mockValidateAndGetBusiness.mockResolvedValueOnce(existingBusiness);
+
       categoryRepo.findOne.mockResolvedValueOnce(null);
 
       await expect(
-        service.updateBusinessEntity(businessId, businessDto, ownerId)
-      ).rejects.toThrow(NotFoundException);
+        service.updateBusiness(businessId, ownerId, businessDto)
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('should handle partial updates', async () => {
@@ -244,7 +278,7 @@ describe('BusinessService', () => {
         id: businessId, 
         ownerId,
         name: 'Old Name',
-          phoneNumber: '+1234567890',
+        phoneNumber: '+1234567890',
         onboardingStep: OnboardingStep.NOT_STARTED,
         category: { id: 'existing-category', name: 'Existing Category' }
       } as Business;
@@ -254,14 +288,33 @@ describe('BusinessService', () => {
         name: businessDto.name
       };
 
-      businessRepo.findOne.mockResolvedValueOnce(existingBusiness);
+      const mockValidateAndGetBusiness = jest.spyOn(service as any, 'validateAndGetBusiness');
+      mockValidateAndGetBusiness.mockResolvedValueOnce(existingBusiness);
+
       businessRepo.save.mockResolvedValueOnce(updatedBusiness);
 
-      const result = await service.updateBusinessEntity(businessId, businessDto, ownerId);
+      const mockToSimplifiedResponse = jest.spyOn(service as any, 'toSimplifiedResponse');
+      const simplifiedBusinessData = {
+        Business_id: businessId,
+        name: updatedBusiness.name,
+        phoneNumber: updatedBusiness.phoneNumber,
+        onboardingStep: updatedBusiness.onboardingStep,
+        business_status: 'ACTIVE',
+        user_Id: ownerId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        category: updatedBusiness.category
+      };
+      mockToSimplifiedResponse.mockReturnValueOnce(simplifiedBusinessData);
 
-      expect(result).toEqual(updatedBusiness);
-      expect(result.phoneNumber).toBe(existingBusiness.phoneNumber);
-      expect(result.category).toEqual(existingBusiness.category);
+      const businessResponseDto = new BusinessResponseDto();
+      businessResponseDto.statusCode = 200;
+      businessResponseDto.message = 'Business updated successfully';
+      businessResponseDto.data = simplifiedBusinessData;
+
+      const result = await service.updateBusiness(businessId, ownerId, businessDto);
+
+      expect(result.data).toEqual(simplifiedBusinessData);
     });
   });
 }); 

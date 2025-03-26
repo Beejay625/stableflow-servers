@@ -44,7 +44,7 @@ export class TransactionRecoveryService {
    * Runs every 5 minutes to check for UNSETTLED transactions that weren't
    * properly queued, and adds them to the processing queue.
    */
-  @Cron(CronExpression.EVERY_5_MINUTES)
+  @Cron(CronExpression.EVERY_DAY_AT_1PM)
   async recoverUnprocessedTransactions() {
     this.logger.log('Starting recovery scan for unprocessed transactions...');
     

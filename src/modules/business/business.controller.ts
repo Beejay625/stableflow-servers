@@ -14,7 +14,12 @@ import {
   UnauthorizedException,
   Logger,
   BadRequestException,
-  Delete
+  Delete,
+  NotFoundException,
+  InternalServerErrorException,
+  ConflictException,
+  UsePipes,
+  ValidationPipe
 } from '@nestjs/common';
 import { 
   ApiTags, 
@@ -38,6 +43,7 @@ import { OnboardingStep, AccountType } from './entities/business.entity';
 import { JwtAuthGuard } from '../../common/guards';
 import { Public } from '../../common/decorators';
 import { VerifyBankDto } from './dto/verify-bank.dto';
+import { NubapiResponse } from './interfaces';
 
 // Create classes for API documentation
 class BusinessResponseDto {
@@ -285,38 +291,114 @@ export class BusinessController {
   })
   @ApiParam({ 
     name: 'id', 
-    description: 'Business ID (required)', 
-    type: 'string',
-    required: true 
-  })
-  @ApiQuery({ 
-    name: 'name', 
-    description: 'Business name', 
-    type: 'string',
-    required: false 
-  })
-  @ApiQuery({ 
-    name: 'phoneNumber', 
-    description: 'Business phone number in international format (e.g., +2347012345678)', 
-    type: 'string',
-    required: false 
-  })
-  @ApiQuery({ 
-    name: 'categoryId', 
-    description: 'ID of an existing category (use either categoryId to select an existing category OR categoryName to create a custom category)', 
-    type: 'string',
-    required: false 
-  })
-  @ApiQuery({ 
-    name: 'categoryName', 
-    description: 'Name for a new custom category (use either categoryId to select an existing category OR categoryName to create a custom category)', 
-    type: 'string',
-    required: false 
+    description: 'Business ID (UUID)', 
+    example: 'business-123'
   })
   @ApiResponse({
     status: 200,
     description: 'Business updated successfully',
-    type: SimplifiedBusinessResponseDto
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 200 },
+        message: { type: 'string', example: 'Business updated successfully' },
+        data: { $ref: getSchemaPath(SimplifiedBusinessResponseDto) },
+        updatedFields: { 
+          type: 'array', 
+          items: { type: 'string' },
+          description: 'List of fields that were updated',
+          example: ['name', 'phoneNumber']
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid input or validation error',
+    schema: {
+      $ref: getSchemaPath(ErrorResponseDto)
+    }
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Business not found',
+    schema: {
+      $ref: getSchemaPath(ErrorResponseDto)
+    }
+  })
+  async updateBusiness(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body(new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      exceptionFactory: (errors) => {
+        const messages = errors.map(error => {
+          if (error.constraints) {
+            return Object.values(error.constraints).join(', ');
+          }
+          return 'Validation failed';
+        });
+        
+        return new BadRequestException(messages);
+      }
+    })) updateData: BusinessDto
+  ) {
+    try {
+      const ownerId = req.user.id;
+      this.logger.debug(`Updating business ${id} for user ${ownerId} with data: ${JSON.stringify(updateData)}`);
+      
+      // Extra check to ensure we are not accepting both fields
+      if (updateData.categoryId && updateData.categoryName) {
+        throw new BadRequestException('Cannot provide both categoryId and categoryName. Please choose one.');
+      }
+
+      // Call service to update business
+      const result = await this.businessService.updateBusiness(id, ownerId, updateData);
+      
+      // Enhance the response with information about what changed
+      if (result.updatedFields?.length > 0) {
+        this.logger.debug(`Updated fields for business ${id}: ${result.updatedFields.join(', ')}`);
+        result.message = `Business updated successfully. Changed fields: ${result.updatedFields.join(', ')}`;
+      } else {
+        result.message = 'No changes were made to the business';
+      }
+      
+      return result;
+    } catch (error) {
+      this.logger.error(`Error updating business ${id}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  @Put(':id/bank-account')
+  @ApiOperation({
+    summary: 'Update or link bank account',
+    description: 'Updates or links a bank account to a business (requires authentication and business ownership)'
+  })
+  @ApiParam({ 
+    name: 'id', 
+    description: 'Business ID (UUID)', 
+    example: 'business-123'
+  })
+  @ApiBody({ type: LinkBankDto })
+  @ApiResponse({
+    status: 200,
+    description: 'Bank account linked successfully',
+    type: BusinessResponseDto
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad request - Missing parameters or invalid data',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 400 },
+        message: { type: 'string', example: 'Account number is required' },
+        error: { type: 'string', example: 'Bad Request' }
+      }
+    }
   })
   @ApiResponse({
     status: 404,
@@ -330,163 +412,27 @@ export class BusinessController {
       }
     }
   })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Invalid input data',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          invalidInput: {
-            summary: 'Invalid input data',
-            value: {
-              statusCode: 400,
-              message: 'categoryId must be a valid UUID format (e.g., 123e4567-e89b-12d3-a456-426614174000)',
-              error: 'Bad Request'
-            }
-          }
-        }
-      }
-    }
-  })
-  async updateBusiness(
-    @Req() req,
-    @Param('id') id: string,
-    @Query('name') name?: string,
-    @Query('phoneNumber') phoneNumber?: string,
-    @Query('categoryId') categoryId?: string,
-    @Query('categoryName') categoryName?: string,
-  ) {
-    const ownerId = req.user.id;
-    this.logger.debug(`Updating business ${id} for user ${ownerId}`);
-    
-    // Construct the update object from query parameters
-    const updateData = new BusinessDto();
-    if (name !== undefined) updateData.name = name;
-    if (phoneNumber !== undefined) updateData.phoneNumber = phoneNumber;
-    if (categoryId !== undefined) updateData.categoryId = categoryId;
-    if (categoryName !== undefined) updateData.categoryName = categoryName;
-    
-    return this.businessService.updateBusiness(id, ownerId, updateData);
-  }
-
-  @Put(':id/bank-account')
-  @ApiOperation({
-    summary: 'Update or link bank account',
-    description: 'Updates or links a bank account to a business (requires authentication and business ownership)'
-  })
-  @ApiParam({ 
-    name: 'id', 
-    description: 'Business ID (UUID)', 
-    example: 'business-123'
-  })
-  @ApiQuery({ 
-    name: 'bankCode', 
-    description: 'Bank code (do not provide if using bankName)', 
-    required: false,
-    example: '057'
-  })
-  @ApiQuery({ 
-    name: 'bankName', 
-    description: 'Bank name (do not provide if using bankCode)', 
-    required: false,
-    example: 'Zenith Bank'
-  })
-  @ApiQuery({ 
-    name: 'accountNumber', 
-    description: 'Account number', 
-    required: true,
-    example: '1234567890'
-  })
-  @ApiQuery({ 
-    name: 'accountType', 
-    description: 'Account type', 
-    required: true,
-    enum: Object.values(AccountType),
-    example: 'pos'
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Bank account linked successfully',
-    content: {
-      'application/json': {
-        schema: {
-          $ref: getSchemaPath(BusinessResponseDto)
-        },
-        examples: {
-          accountLinked: {
-            summary: 'Bank account linked successfully',
-            value: {
-              statusCode: 200,
-              message: 'Success',
-              data: {
-                // example data
-              }
-            }
-          },
-          inactiveBusinessError: {
-            summary: 'Business not active error',
-            value: {
-              statusCode: 400,
-              message: 'Business is not active',
-              error: 'Bad Request'
-            }
-          },
-          businessNotFoundError: {
-            summary: 'Business not found error',
-            value: {
-              statusCode: 404,
-              message: 'Business with ID business-123 not found',
-              error: 'Not Found'
-            }
-          }
-        }
-      }
-    }
-  })
   async updateBankAccount(
     @Param('id') id: string,
-    @Query('bankName') bankName?: string,
-    @Query('bankCode') bankCode?: string,
-    @Query('accountNumber') accountNumber?: string,
-    @Query('accountType') accountType?: string,
+    @Body(ValidationPipe) bankDto: LinkBankDto,
     @Req() req?: any
   ) {
-    // Validate that only one of bankCode or bankName is provided
-    if (bankCode && bankName) {
-      throw new BadRequestException('Please provide either bankCode or bankName, not both');
-    }
-
-    if (!bankCode && !bankName) {
-      throw new BadRequestException('Please provide either bankCode or bankName');
-    }
-
-    if (!accountNumber) {
-      throw new BadRequestException('Account number is required');
-    }
-
-    if (!accountType) {
-      throw new BadRequestException('Account type is required');
-    }
-
-    // Convert string accountType to enum value
-    let accountTypeEnum: AccountType | undefined;
-    
-    if (accountType === AccountType.POS || accountType === AccountType.CASH) {
-      accountTypeEnum = accountType as AccountType;
-    } else {
-      throw new BadRequestException(`Invalid account type. Must be one of: ${Object.values(AccountType).join(', ')}`);
-    }
-
     // Extract owner ID from request if available
     const ownerId = req?.user?.id;
 
-    return this.businessService.updateBankAccount(id, {
-      bankCode,
-      bankName,
-      accountNumber,
-      accountType: accountTypeEnum,
-    }, ownerId);
+    // Use the bank resolution logic for consistent handling
+    const { bankCode: resolvedBankCode } = await this.resolveBankInfo(
+      bankDto.bankCode, 
+      bankDto.bankName
+    );
+
+    // Update the DTO with the resolved bank code
+    const updatedDto = {
+      ...bankDto,
+      bankCode: resolvedBankCode
+    };
+
+    return this.businessService.updateBankAccount(id, updatedDto, ownerId);
   }
 
   @Get()
@@ -623,47 +569,78 @@ export class BusinessController {
     };
   }
 
-  @Public()
-  @Post('verify-bank-account')
+  /**
+   * Resolves bank code/name mapping for verification endpoints
+   * @param bankCode Provided bank code if any
+   * @param bankName Provided bank name if any
+   * @returns Resolved bank code and name
+   */
+  private async resolveBankInfo(bankCode?: string, bankName?: string): Promise<{ bankCode: string; bankName?: string }> {
+    // Validate at least one is provided
+    if (!bankCode && !bankName) {
+      throw new BadRequestException('Either bank code or bank name must be provided');
+    }
+    
+    // If bankName is provided but bankCode isn't, look up the code
+    if (bankName && !bankCode) {
+      try {
+        const banks = await this.businessService.getNigerianBanks();
+        const foundBank = banks.find(bank => bank.name.toLowerCase() === bankName.toLowerCase());
+        
+        if (!foundBank) {
+          throw new BadRequestException(`Bank name "${bankName}" not found in supported banks list`);
+        }
+        
+        return { bankCode: foundBank.code, bankName };
+      } catch (error) {
+        if (error instanceof BadRequestException) {
+          throw error;
+        }
+        throw new BadRequestException(`Failed to resolve bank code from name: ${error.message}`);
+      }
+    }
+    
+    // If bankCode is provided but we want to get the bank name too
+    if (bankCode && !bankName) {
+      try {
+        const banks = await this.businessService.getNigerianBanks();
+        const foundBank = banks.find(bank => bank.code === bankCode);
+        
+        if (foundBank) {
+          bankName = foundBank.name;
+          this.logger.debug(`Resolved bank name "${bankName}" from code "${bankCode}"`);
+        }
+      } catch (error) {
+        // We don't need to fail if bank name resolution fails
+        this.logger.warn(`Failed to resolve bank name from code: ${error.message}`);
+      }
+    }
+    
+    return { bankCode, bankName };
+  }
+
+  /**
+   * Verify bank account
+   */
+  @Get('banks/verify')
   @ApiOperation({
-    summary: 'Verify bank account details without linking to a business',
-    description: 'Validates bank account details using either bank code or bank name (not both) along with account number. Returns bank and account information without linking to a business.'
-  })
-  @ApiQuery({ 
-    name: 'bankCode', 
-    required: false, 
-    description: 'Bank code (required if bankName is not provided)',
-    type: String
-  })
-  @ApiQuery({ 
-    name: 'bankName', 
-    required: false, 
-    description: 'Bank name (required if bankCode is not provided)',
-    type: String
-  })
-  @ApiQuery({ 
-    name: 'accountNumber', 
-    required: true, 
-    description: 'Account number to verify',
-    type: String
+    summary: 'Verify bank account',
+    description: 'Verify bank account using either bank code or bank name with account number'
   })
   @ApiResponse({
     status: 200,
     description: 'Bank account verified successfully',
-    content: {
-      'application/json': {
-        example: {
-          statusCode: 200,
-          message: 'Success',
-          data: {
-            bank: {
-              name: 'Access Bank',
-              code: '044'
-            },
-            account: {
-              number: '0123456789',
-              name: 'John Doe'
-            }
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', example: 'success' },
+        message: { type: 'string', example: 'Bank account verified successfully' },
+        data: {
+          type: 'object',
+          properties: {
+            account_name: { type: 'string', example: 'JOHN DOE' },
+            account_number: { type: 'string', example: '0123456789' },
+            bank_code: { type: 'string', example: '058' }
           }
         }
       }
@@ -671,61 +648,90 @@ export class BusinessController {
   })
   @ApiResponse({
     status: 400,
-    description: 'Bad Request - Invalid bank information or account details',
-    content: {
-      'application/json': {
-        schema: { $ref: getSchemaPath(ErrorResponseDto) },
-        examples: {
-          invalidBank: {
-            summary: 'Invalid bank code error',
-            value: {
-              statusCode: 400,
-              message: 'Invalid bank code: 999999',
-              error: 'Bad Request'
-            }
-          },
-          invalidBankName: {
-            summary: 'Invalid bank name error',
-            value: {
-              statusCode: 400,
-              message: 'Invalid bank name: Nonexistent Bank',
-              error: 'Bad Request'
-            }
-          },
-          verificationFailed: {
-            summary: 'Account verification failed',
-            value: {
-              statusCode: 400,
-              message: 'Account verification failed: Invalid account number',
-              error: 'Bad Request'
-            }
+    description: 'Bad request - Missing parameters or invalid data',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 400 },
+        message: { type: 'string', example: 'Account number is required' },
+        error: { type: 'string', example: 'Bad Request' }
+      }
+    }
+  })
+  async verifyBankAccount(@Query(ValidationPipe) verifyDto: VerifyBankDto): Promise<NubapiResponse> {
+    this.logger.log(`Verifying bank account with ${verifyDto.bankCode ? 'code' : 'name'}`);
+    
+    // Use the common bank resolution logic
+    const { bankCode: resolvedBankCode } = await this.resolveBankInfo(
+      verifyDto.bankCode, 
+      verifyDto.bankName
+    );
+    
+    // Now we should have both accountNumber and bankCode
+    return this.businessService.verifyBankAccount(verifyDto.accountNumber, resolvedBankCode);
+  }
+  
+  /**
+   * Legacy endpoint for bank account verification (redirects to new endpoint)
+   * @deprecated Use GET /banks/verify instead
+   */
+  @Post('verify-bank-account')
+  @Public()
+  @ApiOperation({
+    summary: 'Verify bank account details (Legacy)',
+    description: 'DEPRECATED: Use GET /banks/verify instead. Verifies bank account details without linking to a business.'
+  })
+  @ApiQuery({
+    name: 'bankCode',
+    description: 'Bank code (e.g., "058")', 
+    required: false,
+    example: '058'
+  })
+  @ApiQuery({
+    name: 'bankName',
+    description: 'Bank name (e.g., "Access Bank")', 
+    required: false,
+    example: 'Access Bank'
+  })
+  @ApiQuery({
+    name: 'accountNumber',
+    description: 'Account number to verify', 
+    required: true,
+    example: '0123456789'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Account verification successful',
+    schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', example: 'success' },
+        message: { type: 'string', example: 'Bank account verified successfully' },
+        data: {
+          type: 'object',
+          properties: {
+            account_name: { type: 'string', example: 'JOHN DOE' },
+            account_number: { type: 'string', example: '0123456789' },
+            bank_code: { type: 'string', example: '058' }
           }
         }
       }
     }
   })
-  async verifyBankAccount(
+  async legacyVerifyBankAccount(
     @Query('bankCode') bankCode?: string,
     @Query('bankName') bankName?: string,
     @Query('accountNumber') accountNumber?: string
-  ) {
-    this.logger.log(`Verifying bank account with ${bankCode ? 'code' : 'name'}`);
+  ): Promise<NubapiResponse> {
+    this.logger.log(`Legacy endpoint: Verifying bank account with ${bankCode ? 'code' : 'name'}`);
     
-    if (!accountNumber) {
-      throw new BadRequestException('Account number is required');
-    }
+    // Create a DTO for validation
+    const verifyDto = new VerifyBankDto();
+    verifyDto.bankCode = bankCode;
+    verifyDto.bankName = bankName;
+    verifyDto.accountNumber = accountNumber;
     
-    if (!bankCode && !bankName) {
-      throw new BadRequestException('Either bank code or bank name must be provided');
-    }
-    
-    // Create a DTO-like object to pass to the service
-    const verifyData: VerifyBankDto = {
-      bankCode,
-      bankName,
-      accountNumber
-    };
-    
-    return this.businessService.verifyBankAccount(verifyData);
+    // Delegate to the new endpoint implementation
+    return this.verifyBankAccount(verifyDto);
   }
 }

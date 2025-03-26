@@ -13,6 +13,7 @@ node_modules/
 .env.test
 .env.production
 .env.staging
+.env.example
 
 # IDE - VSCode
 .vscode/*

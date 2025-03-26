@@ -116,13 +116,13 @@ export class SortTransactionService {
       // Add to offramp queue if OfframpService is available
       if (this.offrampService) {
         try {
-          // Queue the transaction for offramping asynchronously
-          await this.offrampService.addToOfframpQueue(transactionId);
-        } catch (queueError) {
+          // Process the transaction directly using the new approach
+          await this.offrampService.processTransaction(tx.id);
+        } catch (processError) {
           // Just log the error but don't throw, to not disrupt the main flow
           this.logger.error(
-            `Failed to add transaction ${transactionId} to offramp queue: ${queueError.message}`,
-            queueError.stack,
+            `Failed to process transaction ${transactionId} for offramp: ${processError.message}`,
+            processError.stack,
           );
         }
       }

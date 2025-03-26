@@ -149,10 +149,53 @@ async function customSmartContractWrite({
   return response.data;
 }
 
+/**
+ * Reads from a contract using BlockRadar API
+ * @param params - Parameters for contract interaction
+ * @returns Promise resolving to the API response
+ * @throws Error if the API call fails
+ */
+async function customSmartContractRead({
+  walletId,
+  addressId,
+  apiKey,
+  abi,
+  address,
+  method,
+  parameters,
+}: {
+  walletId: string;
+  addressId: string;
+  apiKey: string;
+  abi: object[];
+  address: string;
+  method: string;
+  parameters: string[];
+}): Promise<any> {
+  const response = await axios.post(
+    `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/read`,
+    {
+      abi,
+      address,
+      method,
+      parameters,
+    },
+    {
+      headers: {
+        'x-api-key': apiKey,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  
+  return response.data;
+}
+
 export { 
   fetchSupportedTokens,
   getGatewayAddressForNetwork,
   customSmartContractWrite,
+  customSmartContractRead,
   mapNetworkFromConfig,
   getTokenAddress
 };

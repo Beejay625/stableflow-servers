@@ -7,7 +7,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Transaction } from '../entities/transaction.entity';
 import { Business } from '../../business/entities/business.entity';
-import { RedlockService } from '../../redis/redlock.service';
 import { MailService } from '../../../common/utils/email';
 import { GetTransactionService } from '../services/gettransaction.service';
 
@@ -29,7 +28,6 @@ export class TransactionProcessor {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    private readonly redlockService: RedlockService,
     private readonly mailService: MailService
   ) {
     // Load configuration values with sensible defaults

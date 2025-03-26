@@ -1,36 +1,40 @@
-import { IsNotEmpty, IsString, Length, IsOptional, ValidateIf } from 'class-validator';
-import { BaseBankDto } from './base-bank.dto';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsOptional, ValidateIf, IsNotEmpty } from 'class-validator';
+import { Type } from 'class-transformer';
 
 /**
  * DTO for verifying a bank account without linking it to a business
  * Extends BaseBankDto for common bank validation
  */
-export class VerifyBankDto extends BaseBankDto {
-  /**
-   * Bank code from Nigerian banks
-   * Either bankCode or bankName must be provided, but not both
-   */
+export class VerifyBankDto {
+  @ApiProperty({
+    description: 'Bank code from valid Nigerian banks list',
+    example: '058',
+    required: false
+  })
+  @IsOptional()
+  @IsString()
   @ValidateIf(o => !o.bankName)
   @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
-  @IsString()
-  @Length(2, 20)
   bankCode?: string;
 
-  /**
-   * Bank name from Nigerian banks
-   * Either bankCode or bankName must be provided, but not both
-   */
+  @ApiProperty({
+    description: 'Bank name from valid Nigerian banks list',
+    example: 'Access Bank',
+    required: false
+  })
+  @IsOptional()
+  @IsString()
   @ValidateIf(o => !o.bankCode)
   @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
-  @IsString()
-  @Length(2, 100)
   bankName?: string;
 
-  /**
-   * Account number at the selected bank
-   */
-  @IsNotEmpty()
+  @ApiProperty({
+    description: 'Account number to verify',
+    example: '0123456789',
+    required: true
+  })
   @IsString()
-  @Length(5, 20)
+  @IsNotEmpty({ message: 'Account number is required' })
   accountNumber: string;
 } 

@@ -9,10 +9,6 @@ import { PrepareTransactionService } from './preparetransaction.service';
 import { Transaction } from '../wallet/entities/transaction.entity';
 import { Business } from '../business/entities/business.entity';
 import { RedisModule } from '../redis/redis.module';
-import { AwaitingWebhookWorker } from './workers/awaiting-webhook.worker';
-import { ProcessTransactionsWorker } from './workers/process-transactions.worker';
-import { OfframpQueueProcessor } from './workers/process-queue.worker';
-import { QueueModule } from '../queue/queue.module';
 
 @Module({
   imports: [
@@ -20,7 +16,6 @@ import { QueueModule } from '../queue/queue.module';
     HttpModule,
     TypeOrmModule.forFeature([Transaction, Business]),
     RedisModule,
-    QueueModule,
     ScheduleModule.forRoot()
   ],
   controllers: [
@@ -28,20 +23,11 @@ import { QueueModule } from '../queue/queue.module';
   ],
   providers: [
     OfframpService,
-    PrepareTransactionService,
-    AwaitingWebhookWorker,
-    ProcessTransactionsWorker,
-    OfframpQueueProcessor,
-    {
-      provide: 'OfframpQueueProcessor',
-      useExisting: OfframpQueueProcessor
-    }
+    PrepareTransactionService
   ],
   exports: [
     OfframpService,
-    PrepareTransactionService,
-    OfframpQueueProcessor,
-    'OfframpQueueProcessor'
+    PrepareTransactionService
   ]
 })
 export class OfframpModule {} 
