@@ -6,6 +6,7 @@ import axios from 'axios';
 import * as crypto from 'crypto';
 import { ethers } from 'ethers';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { parseUnits, getAddress as viemGetAddress } from 'viem';
 
 import { Transaction as WalletTransaction } from '../wallet/entities/transaction.entity';
 import { Business } from '../business/entities/business.entity';
@@ -20,10 +21,12 @@ import {
   customSmartContractWrite,
   customSmartContractRead,
   mapNetworkFromConfig,
-  getTokenAddress
+  getTokenAddress,
+  getTokenInfoByAddress
 } from './utils';
 import { PrepareTransactionService } from './preparetransaction.service';
 import { RedisService } from '../redis/redis.service';
+import { WalletConfigService } from '../../common/utils/wallet-config';
 
 /**
  * Service responsible for handling cryptocurrency off-ramping operations.
@@ -43,7 +46,6 @@ export class OfframpService {
   private readonly kesProviderId: string;
   private readonly provider: ethers.JsonRpcProvider;
   private readonly walletId: string;
-  private readonly addressId: string;
   private readonly apiKey: string;
   private readonly network: string;
 
@@ -57,7 +59,8 @@ export class OfframpService {
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     private readonly prepareTransactionService: PrepareTransactionService,
-    private readonly redisService: RedisService
+    private readonly redisService: RedisService,
+    private readonly walletConfigService: WalletConfigService
   ) {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.ngnProviderId = this.configService.get<string>('NGN_PROVIDER_ID');
@@ -69,14 +72,46 @@ export class OfframpService {
     const configNetwork = this.configService.get<string>('blockradar.network');
     this.network = mapNetworkFromConfig(configNetwork);
     
-    // Initialize ethers provider with appropriate RPC URL
-    const rpcUrl = this.configService.get<string>('BASE_RPC_URL');
-    this.provider = new ethers.JsonRpcProvider(rpcUrl);
+    // Initialize provider using the getProvider method
+    this.provider = this.getProvider();
     
     this.logger.log(`Initialized OfframpService with network: ${this.network}`);
 
     // Get IDs from environment variables
-    this.addressId = this.configService.get<string>('blockradar.addressId');
+    // this.addressId = this.configService.get<string>('blockradar.addressId');
+  }
+
+  /**
+   * Gets the appropriate blockchain provider based on the network
+   * 
+   * @param network - The network to get a provider for
+   * @returns ethers.JsonRpcProvider - A provider configured for the specified network
+   */
+  private getProvider(network?: string): ethers.JsonRpcProvider {
+    // Use provided network or default to service network
+    const targetNetwork = network || this.network;
+    let rpcUrl: string;
+    
+    // Determine the appropriate RPC URL based on the network
+    if (targetNetwork.includes('Base')) {
+      rpcUrl = this.configService.get<string>('BASE_RPC_URL');
+      this.logger.log(`[DEBUG] Using Base RPC URL for network ${targetNetwork}`);
+    } else if (targetNetwork.includes('BNB')) {
+      rpcUrl = this.configService.get<string>('BNB_RPC_URL');
+      this.logger.log(`[DEBUG] Using BNB RPC URL for network ${targetNetwork}`);
+    } else {
+      // Default to BASE_RPC_URL if no specific match
+      rpcUrl = this.configService.get<string>('BASE_RPC_URL');
+      this.logger.log(`[DEBUG] Using default RPC URL for network ${targetNetwork}`);
+    }
+    
+    if (!rpcUrl) {
+      this.logger.warn(`[DEBUG] No RPC URL configured for network ${targetNetwork}, using default provider`);
+      // Return a default provider if no RPC URL is configured
+      return new ethers.JsonRpcProvider('https://rpc.ankr.com/base');
+    }
+    
+    return new ethers.JsonRpcProvider(rpcUrl);
   }
 
   /**
@@ -100,20 +135,42 @@ export class OfframpService {
       this.logger.log(`[DEBUG] Preparing transaction data for offramp, transactionId: ${transactionId}`);
       const transaction = await this.prepareTransactionService.prepareTransactionForOfframp(transactionId);
       this.logger.log(`[DEBUG] Transaction data prepared successfully, tokenAddress: ${transaction.tokenAddress}, amount: ${transaction.amount}`);
+      this.logger.log(`[DEBUG] Prepared transaction details: token=${transaction.token}, decimals=${transaction.tokenDecimals}, rate=${transaction.rate}`);
 
-      // Get the gateway address for current network
-      const gatewayAddress = getGatewayAddressForNetwork(this.network);
-      this.logger.log(`[DEBUG] Using gateway address ${gatewayAddress} for network ${this.network}`);
+      // Use the network from the prepared transaction, this will respect the transaction's chain
+      const transactionNetwork = transaction.network;
+      this.logger.log(`[DEBUG] Using transaction-specific network: ${transactionNetwork}`);
+
+      // Get the gateway address for the transaction's network
+      const gatewayAddress = getGatewayAddressForNetwork(transactionNetwork);
+      this.logger.log(`[DEBUG] Using gateway address ${gatewayAddress} for network ${transactionNetwork}`);
       
-      // Fetch supported tokens
-      this.logger.log(`[DEBUG] Fetching supported tokens for network ${this.network}`);
-      const supportedTokens = fetchSupportedTokens(this.network);
+      // Fetch supported tokens for the transaction's network
+      this.logger.log(`[DEBUG] Fetching supported tokens for network ${transactionNetwork}`);
+      const supportedTokens = fetchSupportedTokens(transactionNetwork);
       if (!supportedTokens) {
-        const errorMsg = `Unsupported network: ${this.network}`;
+        const errorMsg = `Unsupported network: ${transactionNetwork}`;
         this.logger.error(`[DEBUG] ${errorMsg}`);
         throw new Error(errorMsg);
       }
-      this.logger.log(`[DEBUG] Network ${this.network} is supported with ${supportedTokens.length} tokens`);
+      this.logger.log(`[DEBUG] Network ${transactionNetwork} is supported with ${supportedTokens.length} tokens`);
+
+      // Get wallet config for the transaction based on blockchain and token
+      const walletConfig = this.walletConfigService.getWalletConfigForTransaction({
+        blockchainName: transaction.chain,
+        tokenSymbol: transaction.tokenSymbol,
+        walletId: transaction.walletId
+      });
+      
+      this.logger.log(`[DEBUG] Using wallet config: walletName=${walletConfig.walletName}, walletId=${walletConfig.walletId}`);
+      
+      // Ensure we have a valid addressId
+      if (!transaction.addressId) {
+        this.logger.error(`[DEBUG] Missing addressId for transaction ${transactionId}. This is required for blockchain operations.`);
+        throw new Error(`Missing addressId for transaction ${transactionId}`);
+      }
+      
+      this.logger.log(`[DEBUG] Using transaction addressId: ${transaction.addressId}`);
 
       // Step 1: Approve token spending and get transaction hash
       this.logger.log(`[DEBUG] Approving token spending for token: ${transaction.tokenAddress}, amount: ${transaction.amount.toString()}`);
@@ -121,7 +178,13 @@ export class OfframpService {
         tokenAddress: transaction.tokenAddress,
         spenderAddress: gatewayAddress,
         amount: transaction.amount.toString(),
+        ownerAddress: transaction.senderAddress,
+        walletConfig,
+        addressId: transaction.addressId
       });
+      
+      // Log additional information about the addressId
+      this.logger.log(`[DEBUG] Using transaction addressId: ${transaction.addressId} for token approval`);
 
       this.logger.log(`[DEBUG] Token approval transaction executed with hash: ${approvalTx.txHash}`);
 
@@ -153,19 +216,80 @@ export class OfframpService {
       // Step 5: Create the order
       this.logger.log(`[DEBUG] Creating order on gateway contract for transaction ${transactionId}`);
       this.logger.log(`[DEBUG] Order parameters: token=${transaction.tokenAddress}, amount=${transaction.amount.toString()}, refundAddress=${transaction.refundAddress}`);
+      this.logger.log(`[DEBUG] Using addressId=${transaction.addressId} for order creation`);
+      
+      // Validate token information is available
+      if (!transaction.tokenDecimals) {
+        throw new Error(`Missing token decimal information for ${transaction.token}`);
+      }
+      
+      // Convert the amount to proper token units based on the token's decimals
+      const amountStr = transaction.amount.toString();
+      this.logger.log(`[DEBUG] Converting amount ${amountStr} using ${transaction.tokenDecimals} decimals for ${transaction.token}`);
+      
+      let amountInTokenUnits: string;
+      try {
+        // Use viem's parseUnits for reliable token amount conversion
+        // Ensure we're using the correct number of decimals (6 for USDC)
+        amountInTokenUnits = parseUnits(amountStr, transaction.tokenDecimals || 6).toString();
+        this.logger.log(`[DEBUG] Amount converted using parseUnits: ${amountStr} => ${amountInTokenUnits}`);
+      } catch (conversionError) {
+        this.logger.error(`[DEBUG] Error converting amount to token units: ${conversionError.message}`);
+        throw new Error(`Failed to convert amount: ${conversionError.message}`);
+      }
+      
+      // Validate the rate from the transaction
+      if (!transaction.rate || transaction.rate <= 0) {
+        throw new Error(`Invalid rate: ${transaction.rate}. Rate must be greater than 0.`);
+      }
+      
+      const rate = transaction.rate.toString();
+      this.logger.log(`[DEBUG] Using rate from transaction: ${rate} basis points`);
+      
+      // Helper function to normalize addresses
+      const getAddress = (address: string): string => {
+        if (!address) {
+          throw new Error('Invalid address: address is empty');
+        }
+        
+        try {
+          // Use viem's getAddress for reliable address normalization
+          return viemGetAddress(address);
+        } catch (error) {
+          this.logger.error(`[DEBUG] Error normalizing address: ${error.message}`);
+          throw new Error(`Invalid address format: ${address}`);
+        }
+      };
+      
+      // Set fee recipient and fee amount
+      const senderFeeRecipient = getAddress("0x0000000000000000000000000000000000000000"); // Zero address
+      const senderFee = "0"; // No fee
+      
+      // Log the exact parameters being passed to the contract in the correct order
+      this.logger.log(`[DEBUG] Smart contract parameters in exact order: [
+        token: ${transaction.tokenAddress}, 
+        amount: ${amountInTokenUnits}, 
+        rate: ${rate},
+        senderFeeRecipient: ${senderFeeRecipient}, 
+        senderFee: ${senderFee}, 
+        refundAddress: ${transaction.refundAddress}, 
+        messageHash: ${encryptedRecipient.substring(0, 20)}...]`);
       
       const txResponse = await customSmartContractWrite({
-        walletId: this.walletId,
-        addressId: this.addressId,
-        apiKey: this.apiKey,
+        walletId: walletConfig.walletId,
+        addressId: transaction.addressId,
+        apiKey: walletConfig.apiKey,
         abi: gatewayAbi as unknown as object[],
         address: gatewayAddress,
         method: "createOrder",
         parameters: [
           transaction.tokenAddress,
-          transaction.amount.toString(),
-          encryptedRecipient,
-          transaction.refundAddress
+          amountInTokenUnits,
+          rate,
+          senderFeeRecipient,
+          senderFee,
+          transaction.refundAddress,
+          encryptedRecipient
         ],
       });
 
@@ -236,17 +360,27 @@ export class OfframpService {
    * @param txHash - Transaction hash to search for
    * @param senderAddress - Address that initiated the transaction
    * @param tokenAddress - Token contract address used in transaction
+   * @param network - Optional network to use (overrides this.network)
    * @returns Promise<string> - Order ID associated with the transaction
    * @throws Error if order ID cannot be found through any method
    */
-  async getOrderIdFromTransaction(txHash: string, senderAddress: string, tokenAddress: string): Promise<string> {
+  async getOrderIdFromTransaction(
+    txHash: string, 
+    senderAddress: string, 
+    tokenAddress: string,
+    network?: string
+  ): Promise<string> {
     try {
       this.logger.log(`Fetching order ID for transaction: ${txHash}`);
       
-      // Get gateway address for the configured network
-      const gatewayAddress = getGatewayAddressForNetwork(this.network);
+      // Use provided network or fallback to default
+      const useNetwork = network || this.network;
+      this.logger.log(`Using network ${useNetwork} for order ID retrieval`);
+      
+      // Get gateway address for the specified network
+      const gatewayAddress = getGatewayAddressForNetwork(useNetwork);
       if (!gatewayAddress) {
-        throw new Error('Gateway address not found for network');
+        throw new Error(`Gateway address not found for network ${useNetwork}`);
       }
       
       // Method 1: Try getting the order ID from the API first
@@ -271,8 +405,11 @@ export class OfframpService {
       }
       
       // Method 2: Get the order ID from transaction logs directly
+      // Use a network-specific provider
+      const provider = this.getProvider(useNetwork);
+      
       // Wait for the transaction receipt
-      const receipt = await this.provider.getTransactionReceipt(txHash);
+      const receipt = await provider.getTransactionReceipt(txHash);
       
       if (!receipt) {
         throw new Error('Transaction receipt not found');
@@ -751,85 +888,171 @@ export class OfframpService {
   }
   
   /**
-   * Approves a token for spending by the gateway contract
-   * This is required before creating an offramp order
+   * Approves token spending for the offramp process
+   * 
+   * Steps:
+   * 1. Check existing allowance
+   * 2. If allowance is insufficient, create approve transaction
+   * 
+   * @param tokenAddress - Token contract address
+   * @param spenderAddress - Address to approve (gateway contract)
+   * @param amount - Amount to approve
+   * @param ownerAddress - Token owner address
+   * @param walletConfig - Wallet configuration
+   * @param addressId - Address ID for the operation
+   * @returns Approval transaction hash
    */
   async approveTokenSpending({
     tokenAddress,
     spenderAddress,
     amount,
+    ownerAddress,
+    walletConfig,
+    addressId
   }: {
     tokenAddress: string;
     spenderAddress: string;
     amount: string;
+    ownerAddress: string;
+    walletConfig: { walletId: string; apiKey: string; walletName: string; };
+    addressId?: string;
   }): Promise<any> {
     this.logger.log(`[DEBUG] Starting token approval for ${tokenAddress}`);
-    this.logger.log(`[DEBUG] Approval parameters: spender=${spenderAddress}, amount=${amount}`);
+    this.logger.log(`[DEBUG] Approval parameters: spender=${spenderAddress}, amount=${amount}, owner=${ownerAddress}`);
+    
+    // Validate addressId is provided and valid
+    if (!addressId) {
+      this.logger.error('[DEBUG] Missing addressId for token approval. This is required for blockchain operations.');
+      throw new Error('Missing addressId for token approval');
+    }
+    
+    this.logger.log(`[DEBUG] Using addressId for approval: ${addressId}`);
     
     try {
-      // First check if we already have sufficient allowance
+      // Check existing allowance first
       this.logger.log(`[DEBUG] Checking existing allowance for token ${tokenAddress}`);
       const currentAllowance = await this.checkAllowance(
-        tokenAddress, 
-        this.configService.get<string>('blockradar.address'), 
-        spenderAddress
+        tokenAddress,
+        ownerAddress,
+        spenderAddress,
+        walletConfig,
+        addressId
       );
       
       this.logger.log(`[DEBUG] Current allowance for token ${tokenAddress}: ${currentAllowance}`);
       
-      // If we already have sufficient allowance, no need for a new approval
-      if (BigInt(currentAllowance) >= BigInt(amount)) {
-        this.logger.log(`[DEBUG] Existing allowance is sufficient, skipping approval transaction`);
-        return { txHash: 'existing-allowance', status: true };
+      // Get token information to determine decimal places - with no fallback
+      const tokenInfo = getTokenInfoByAddress(tokenAddress);
+      if (!tokenInfo) {
+        throw new Error(`Token information not found for address ${tokenAddress}`);
       }
       
-      this.logger.log(`[DEBUG] Sending approval transaction to blockchain`);
-      const result = await customSmartContractWrite({
-      walletId: this.walletId,
-      addressId: this.addressId,
-      apiKey: this.apiKey,
-      abi: erc20Abi as unknown as object[],
-      address: tokenAddress,
-      method: "approve",
-      parameters: [spenderAddress, amount],
-    });
+      const decimals = tokenInfo.decimals;
+      this.logger.log(`[DEBUG] Using token decimals: ${decimals} for ${tokenAddress} (${tokenInfo.symbol})`);
       
-      this.logger.log(`[DEBUG] Approval transaction sent successfully: ${JSON.stringify(result)}`);
-      return result;
+      // Convert the amount string to a token unit format
+      let amountInTokenUnits: string;
+      try {
+        // Use viem's parseUnits for reliable token amount conversion
+        amountInTokenUnits = parseUnits(amount, decimals).toString();
+        this.logger.log(`[DEBUG] Amount converted using parseUnits: ${amount} => ${amountInTokenUnits}`);
+      } catch (conversionError) {
+        this.logger.error(`[DEBUG] Error converting amount to token units: ${conversionError.message}`);
+        throw new Error(`Failed to convert amount: ${conversionError.message}`);
+      }
+      
+      // Check if current allowance is already enough
+      const currentAllowanceBigInt = BigInt(currentAllowance);
+      const requiredAllowanceBigInt = BigInt(amountInTokenUnits);
+      
+      if (currentAllowanceBigInt >= requiredAllowanceBigInt) {
+        this.logger.log(`[DEBUG] Existing allowance is sufficient, skipping approval transaction`);
+        return { txHash: 'existing-allowance' };
+      }
+      
+      // If allowance is insufficient, proceed with approval - use max uint256 value
+      this.logger.log(`[DEBUG] Existing allowance is insufficient, creating approval transaction`);
+      
+      // Use maximum uint256 value for unlimited approval (standard practice)
+      const maxApprovalAmount = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
+      this.logger.log(`[DEBUG] Using max uint256 approval amount: ${maxApprovalAmount}`);
+      
+      const txResponse = await customSmartContractWrite({
+        walletId: walletConfig.walletId,
+        addressId,
+        apiKey: walletConfig.apiKey,
+        abi: erc20Abi as unknown as object[],
+        address: tokenAddress,
+        method: 'approve',
+        parameters: [spenderAddress, maxApprovalAmount],
+      });
+      
+      this.logger.log(`[DEBUG] Token approval successful, txHash: ${txResponse.txHash}`);
+      return txResponse;
     } catch (error) {
-      this.logger.error(`[DEBUG] Error in token approval: ${error.message}`, error.stack);
+      this.logger.error(`[DEBUG] Error approving token spending: ${error.message}`, error.stack);
+      
+      // Handle error response data if it exists
+      if (error.message && error.message.includes('API error')) {
+        // Log more details to help with debugging
+        this.logger.error(`[DEBUG] API error details: ${error.message}`);
+      }
+      
       throw error;
     }
   }
 
   /**
-   * Check token allowance for the gateway contract
-   * Uses contract read operation instead of write for better efficiency
+   * Checks the current allowance for a token
    * 
-   * @param tokenAddress The address of the token contract
-   * @param ownerAddress The address that owns the tokens
-   * @param spenderAddress The address that will spend the tokens (gateway)
-   * @returns Promise<string> The current token allowance as a string
-   * @throws Error if the token allowance check fails
+   * @param tokenAddress - Token contract address
+   * @param ownerAddress - Address of the token owner
+   * @param spenderAddress - Address to check allowance for
+   * @param walletConfig - Wallet configuration
+   * @param addressId - Address ID for the operation
+   * @returns The current allowance as a string
    */
-  private async checkAllowance(tokenAddress: string, ownerAddress: string, spenderAddress: string): Promise<string> {
+  private async checkAllowance(
+    tokenAddress: string, 
+    ownerAddress: string, 
+    spenderAddress: string,
+    walletConfig: { walletId: string; apiKey: string; walletName: string; },
+    addressId?: string
+  ): Promise<string> {
+    // Validate addressId is provided and valid
+    if (!addressId) {
+      this.logger.error('[DEBUG] Missing addressId for allowance check. This is required for blockchain operations.');
+      throw new Error('Missing addressId for allowance check');
+    }
+    
+    this.logger.log(`[DEBUG] Checking token allowance: token=${tokenAddress}, owner=${ownerAddress}, spender=${spenderAddress}`);
+    this.logger.log(`[DEBUG] Using walletId=${walletConfig.walletId}, addressId=${addressId}`);
+    this.logger.log(`[DEBUG] API Key available: ${!!walletConfig.apiKey}`);
+    this.logger.log(`[DEBUG] Using API Key: ${walletConfig.apiKey ? walletConfig.apiKey.substring(0, 6) + '...' : 'undefined'}`);
+    
     try {
-      this.logger.log(`[DEBUG] Checking token allowance: token=${tokenAddress}, owner=${ownerAddress}, spender=${spenderAddress}`);
-      
       const response = await customSmartContractRead({
-        walletId: this.walletId,
-        addressId: this.addressId,
-        apiKey: this.apiKey,
+        walletId: walletConfig.walletId,
+        addressId,
+        apiKey: walletConfig.apiKey,
         abi: erc20Abi as unknown as object[],
         address: tokenAddress,
-        method: "allowance",
+        method: 'allowance',
         parameters: [ownerAddress, spenderAddress],
       });
       
-      this.logger.log(`[DEBUG] Current allowance: ${response.data}`);
-      return response.data;
+      // Extract allowance value from response
+      const allowance = response?.result?.[0] || '0';
+      this.logger.log(`[DEBUG] Current allowance: ${allowance}`);
+      return allowance;
     } catch (error) {
-      this.logger.error(`[DEBUG] Error checking allowance: ${error.message}`, error.stack);
+      this.logger.error(`[DEBUG] Error checking token allowance: ${error.message}`, error.stack);
+      
+      // Handle error response data if it exists
+      if (error.message && error.message.includes('API error')) {
+        this.logger.error(`[DEBUG] API error details: ${error.message}`);
+      }
+      
       throw error;
     }
   }
@@ -1050,7 +1273,8 @@ export class OfframpService {
 
           // Get transaction receipt to see if it was confirmed
           // Add timeout to prevent hanging on RPC issues
-          const receiptPromise = this.provider.getTransactionReceipt(txHash);
+          const provider = this.getProvider(mapNetworkFromConfig(this.configService.get<string>('blockradar.network'), transaction.chain));
+          const receiptPromise = provider.getTransactionReceipt(txHash);
           const receiptTimeoutPromise = new Promise<ethers.TransactionReceipt | null>((_, reject) => {
             setTimeout(() => reject(new Error('Blockchain RPC request timed out')), 10000);
           });
@@ -1074,7 +1298,8 @@ export class OfframpService {
             const orderId = await this.getOrderIdFromTransaction(
               txHash,
               transaction.businessAddress,
-              transaction.metadata?.offramp?.tokenAddress || ''
+              transaction.metadata?.offramp?.tokenAddress || '',
+              mapNetworkFromConfig(this.configService.get<string>('blockradar.network'), transaction.chain)
             );
 
             // Update transaction with order ID
@@ -1134,7 +1359,7 @@ export class OfframpService {
               );
             }
           }
-    } catch (error) {
+        } catch (error) {
           this.logger.error(`Error processing stalled transaction ${transaction.id}: ${error.message}`, error.stack);
           stats.errors++;
         }
@@ -1267,7 +1492,7 @@ export class OfframpService {
         
         try {
           // Check blockchain confirmation
-          const receipt = await this.provider.getTransactionReceipt(txHash);
+          const receipt = await this.getProvider(mapNetworkFromConfig(this.configService.get<string>('blockradar.network'), transaction.chain)).getTransactionReceipt(txHash);
           
           if (!receipt) {
             return {
@@ -1284,7 +1509,8 @@ export class OfframpService {
               const orderId = await this.getOrderIdFromTransaction(
                 txHash,
                 transaction.businessAddress,
-                transaction.metadata?.offramp?.tokenAddress || ''
+                transaction.metadata?.offramp?.tokenAddress || '',
+                mapNetworkFromConfig(this.configService.get<string>('blockradar.network'), transaction.chain)
               );
               
               // Update transaction with order ID

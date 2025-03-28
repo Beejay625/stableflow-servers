@@ -59,6 +59,9 @@ async function bootstrap() {
     const app = await NestFactory.create(AppModule);
     
     try {
+      // Enable shutdown hooks for proper cleanup
+      app.enableShutdownHooks();
+      
       // Get config service
       const configService = app.get(ConfigService);
       

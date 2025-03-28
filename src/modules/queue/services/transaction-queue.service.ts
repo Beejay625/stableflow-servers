@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bull';
-import { Queue, Job } from 'bullmq';
+import { Queue, Job } from 'bull';
 import { RedisService } from '../../redis/redis.service';
 import { QueueError } from '../queue.error';
 import { TransactionRepository } from '../../wallet/repositories/transaction.repository';

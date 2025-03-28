@@ -8,6 +8,7 @@ export interface Transaction {
   tokenAddress: string;
   token: string;
   tokenDecimals: number;
+  tokenSymbol: string;
   amount: number;
   currency: string;
   rate: number;
@@ -15,6 +16,9 @@ export interface Transaction {
   memo?: string;
   status: TransactionStatus;
   network: string;
+  chain: string;
+  walletId?: string;
+  addressId?: string;
 }
 
 export interface Token {

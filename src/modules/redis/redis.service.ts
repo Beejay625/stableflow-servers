@@ -1,15 +1,11 @@
 import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { Queue, QueueOptions } from 'bullmq';
-// Comment out Upstash Redis import
-// import { Redis as UpstashRedis } from '@upstash/redis';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private redisClient: Redis | null = null;
-  private queues: Map<string, Queue> = new Map();
   private isConnected: boolean = false;
   private isConnecting: boolean = false;
 
@@ -161,30 +157,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     return client.set(key, value);
   }
 
-  getQueue(name: string, options?: Partial<QueueOptions>): Queue {
-    if (!this.queues.has(name)) {
-      const defaultOptions: QueueOptions = {
-        connection: {
-          host: this.configService.get('REDIS_HOST'),
-          port: parseInt(this.configService.get('REDIS_PORT') || '6379'),
-          password: this.configService.get('REDIS_PASSWORD'),
-          tls: {
-            rejectUnauthorized: false
-          }
-        },
-      };
-
-      const queue = new Queue(name, {
-        ...defaultOptions,
-        ...options,
-      });
-
-      this.queues.set(name, queue);
-    }
-
-    return this.queues.get(name);
-  }
-
   async onModuleDestroy() {
     // Close Redis client
     if (this.redisClient) {
@@ -198,16 +170,6 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         this.redisClient = null;
         this.isConnected = false;
       }
-    }
-
-    // Close all queues
-    if (this.queues.size > 0) {
-      this.logger.log(`=== CLOSING ${this.queues.size} QUEUES... ===`);
-      for (const queue of this.queues.values()) {
-        await queue.close();
-      }
-      this.queues.clear();
-      this.logger.log('=== ALL QUEUES CLOSED SUCCESSFULLY ===');
     }
   }
 } 

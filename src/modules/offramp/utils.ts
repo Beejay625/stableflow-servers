@@ -8,15 +8,23 @@ import axios from 'axios';
  * @returns The actual network name used in the system
  */
 function mapNetworkFromConfig(configNetwork: string, chain?: string): string {
-  // If chain is provided and matches Base, use Base networks
-  if (chain && chain.toLowerCase() === 'base') {
-    return configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
+  // First check if chain is specified
+  if (chain) {
+    // Handle Base chain explicitly
+    if (chain.toLowerCase() === 'base') {
+      return configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
+    }
+    
+    // Handle BNB Smart Chain explicitly
+    if (chain.toLowerCase().includes('bnb') || chain.toLowerCase().includes('binance')) {
+      return configNetwork === 'mainnet' ? 'BNB Smart Chain' : 'BNB Smart Chain Testnet';
+    }
   }
 
-  // Default to BNB Smart Chain networks
+  // Default mapping based on config only (when chain is not provided)
   switch (configNetwork) {
     case 'mainnet':
-      return 'BNB Smart Chain';
+      return 'BNB Smart Chain'; // Default to BNB Smart Chain if no chain specified
     case 'testnet':
       return 'BNB Smart Chain Testnet';
     case 'base':
@@ -44,6 +52,12 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
       },
     ],
     "Base Sepolia": [
+      {
+        name: "USD Coin Testnet",
+        symbol: "USDC",
+        decimals: 6,
+        address: "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9",
+      },
       {
         name: "Dai",
         symbol: "DAI",
@@ -79,10 +93,10 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
  */
 function getGatewayAddressForNetwork(network: string): string {
   const addresses: { [key: string]: string } = {
-    'Base': "0x30f6a8457f8e42371e204a9c103f2bd42341dd0f",
-    'BNB Smart Chain': "0x1FA0EE7F9410F6fa49B7AD5Da72Cf01647090028",
-    'Base Sepolia': "0x847dfdaa218f9137229cf8424378871a1da8f625",
-    'BNB Smart Chain Testnet': "0x0000000000000000000000000000000000000000"
+    'Base': "0x30f6a8457f8e42371e204a9c103f2bd42341dd0f", // Base Mainnet
+    'BNB Smart Chain': "0x1FA0EE7F9410F6fa49B7AD5Da72Cf01647090028", // BNB Smart Chain Mainnet
+    'Base Sepolia': "0x847dfdaa218f9137229cf8424378871a1da8f625", // Base Testnet
+    'BNB Smart Chain Testnet': "0x0000000000000000000000000000000000000000" // BNB Smart Chain Testnet
   };
 
   const address = addresses[network];
@@ -94,13 +108,31 @@ function getGatewayAddressForNetwork(network: string): string {
 }
 
 /**
- * Fetches a token's address for a specific network
+ * Fetches a token's address for a specific network and symbol
  * @param network - The network to fetch the token address from
  * @param symbol - The token symbol (e.g., 'USDC', 'USDT', 'DAI')
  * @returns The token address
  * @throws Error if network is not supported or token is not found
  */
 function getTokenAddress(network: string, symbol: string): string {
+  // Specific handling for known token/network combinations based on requirements
+  if (symbol === 'USDC') {
+    if (network === 'Base') {
+      return "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"; // Base Mainnet USDC
+    } else if (network === 'Base Sepolia') {
+      return "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9"; // Base Sepolia USDC (testnet)
+    }
+  }
+  
+  if (symbol === 'USDT') {
+    if (network === 'BNB Smart Chain') {
+      return "0x55d398326f99059fF775485246999027B3197955"; // BNB Mainnet USDT
+    } else if (network === 'BNB Smart Chain Testnet') {
+      return "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd"; // BNB Testnet USDT
+    }
+  }
+
+  // Fallback to tokens list if specific handling doesn't apply
   const tokens = fetchSupportedTokens(network);
   if (!tokens) {
     throw new Error(`Unsupported network: ${network}`);
@@ -137,23 +169,64 @@ async function customSmartContractWrite({
   method: string;
   parameters: string[];
 }): Promise<any> {
-  const response = await axios.post(
-    `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/write`,
-    {
-      abi,
-      address,
-      method,
-      parameters,
-    },
-    {
-      headers: {
-        'x-api-key': apiKey,
-        'Content-Type': 'application/json',
-      },
+  try {
+    // Validate required parameters
+    if (!walletId) {
+      throw new Error('Missing walletId for smart contract write');
     }
-  );
-  
-  return response.data;
+    
+    if (!addressId) {
+      throw new Error('Missing addressId for smart contract write');
+    }
+    
+    if (!apiKey) {
+      throw new Error('Missing apiKey for smart contract write');
+    }
+    
+    // Log request details (without sensitive information)
+    console.log(`[DEBUG] Smart contract write request: method=${method}, address=${address}`);
+    console.log(`[DEBUG] Using walletId=${walletId}, addressId=${addressId}`);
+    console.log(`[DEBUG] Parameters: ${JSON.stringify(parameters)}`);
+    
+    const response = await axios.post(
+      `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/write`,
+      {
+        abi,
+        address,
+        method,
+        parameters,
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    
+    return response.data;
+  } catch (error) {
+    // Enhanced error logging with complete API response
+    if (axios.isAxiosError(error) && error.response) {
+      const errorMessage = `API error (${error.response.status}): ${error.message}`;
+      const responseData = error.response.data ? 
+        `Response data: ${JSON.stringify(error.response.data)}` : 
+        'No response data available';
+      
+      // Create a more detailed error that includes the API response data
+      const enhancedError = new Error(`${errorMessage}. ${responseData}`);
+      
+      // Copy the original stack trace
+      if (error.stack) {
+        enhancedError.stack = error.stack;
+      }
+      
+      throw enhancedError;
+    }
+    
+    // For non-Axios errors, just rethrow
+    throw error;
+  }
 }
 
 /**
@@ -179,23 +252,94 @@ async function customSmartContractRead({
   method: string;
   parameters: string[];
 }): Promise<any> {
-  const response = await axios.post(
-    `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/read`,
-    {
-      abi,
-      address,
-      method,
-      parameters,
-    },
-    {
-      headers: {
-        'x-api-key': apiKey,
-        'Content-Type': 'application/json',
-      },
+  try {
+    // Validate required parameters
+    if (!walletId) {
+      throw new Error('Missing walletId for smart contract read');
     }
-  );
+    
+    if (!addressId) {
+      throw new Error('Missing addressId for smart contract read');
+    }
+    
+    if (!apiKey) {
+      throw new Error('Missing apiKey for smart contract read');
+    }
+    
+    // Log request details (without sensitive information)
+    console.log(`[DEBUG] Smart contract read request: method=${method}, address=${address}`);
+    console.log(`[DEBUG] Using walletId=${walletId}, addressId=${addressId}`);
+    console.log(`[DEBUG] Parameters: ${JSON.stringify(parameters)}`);
+    
+    const response = await axios.post(
+      `https://api.blockradar.co/v1/wallets/${walletId}/addresses/${addressId}/contracts/read`,
+      {
+        abi,
+        address,
+        method,
+        parameters,
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    
+    return response.data;
+  } catch (error) {
+    // Enhanced error logging with complete API response
+    if (axios.isAxiosError(error) && error.response) {
+      const errorMessage = `API error (${error.response.status}): ${error.message}`;
+      const responseData = error.response.data ? 
+        `Response data: ${JSON.stringify(error.response.data)}` : 
+        'No response data available';
+      
+      // Create a more detailed error that includes the API response data
+      const enhancedError = new Error(`${errorMessage}. ${responseData}`);
+      
+      // Copy the original stack trace
+      if (error.stack) {
+        enhancedError.stack = error.stack;
+      }
+      
+      throw enhancedError;
+    }
+    
+    // For non-Axios errors, just rethrow
+    throw error;
+  }
+}
+
+/**
+ * Gets token information by address
+ * @param tokenAddress The token address to look up
+ * @returns Token information or null if not found
+ */
+function getTokenInfoByAddress(tokenAddress: string): Token | null {
+  // Normalize the address
+  const normalizedAddress = tokenAddress.toLowerCase();
   
-  return response.data;
+  // Check all supported networks
+  const networks = [
+    'Base',
+    'Base Sepolia',
+    'BNB Smart Chain',
+    'BNB Smart Chain Testnet'
+  ];
+  
+  for (const network of networks) {
+    const tokens = fetchSupportedTokens(network);
+    if (!tokens) continue;
+    
+    const token = tokens.find(t => t.address.toLowerCase() === normalizedAddress);
+    if (token) {
+      return token;
+    }
+  }
+  
+  return null;
 }
 
 export { 
@@ -204,5 +348,6 @@ export {
   customSmartContractWrite,
   customSmartContractRead,
   mapNetworkFromConfig,
-  getTokenAddress
+  getTokenAddress,
+  getTokenInfoByAddress
 };

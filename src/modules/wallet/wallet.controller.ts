@@ -19,7 +19,7 @@ import {
 import { ApiOperation, ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { WebhookService } from './services/webhook.service';
 import { TransactionQueueService } from '../queue/services/transaction-queue.service';
-import { GetTransactionService } from './services/gettransaction.service';
+import { ValidateSignatureService } from './services/validatesignature.service';
 import { SortTransactionService } from './services/sort.transaction.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Request, Response } from 'express';
@@ -34,6 +34,7 @@ import { RedisService } from '../redis/redis.service';
 import { QueueService } from '../queue/queue.service';
 import { WalletConfigService } from '../../common/utils/wallet-config';
 import { OfframpService } from '../offramp/offramp.service';
+import { ResendWebhookService } from './services/resendwebhook.service';
 
 /**
  * Controller for wallet-related functionality
@@ -48,7 +49,6 @@ export class WalletController {
   constructor(
     private readonly webhookService: WebhookService,
     private readonly transactionQueue: TransactionQueueService,
-    private readonly getTransactionService: GetTransactionService,
     private readonly sortTransactionService: SortTransactionService,
     private readonly redisService: RedisService,
     private readonly queueService: QueueService,
@@ -58,114 +58,66 @@ export class WalletController {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    private readonly offrampService: OfframpService
+    private readonly offrampService: OfframpService,
+    private readonly resendWebhookService: ResendWebhookService,
+    private readonly validateSignatureService: ValidateSignatureService
   ) {}
 
   /**
    * Handles incoming webhook notifications from Blockradar
-   * 
-   * This endpoint receives transaction notifications when cryptocurrency payments
-   * are made to our business wallets. When a payment hits one of our wallet addresses,
-   * Blockradar sends a webhook to this endpoint with details of the transaction.
-   * 
-   * The workflow is:
-   * 1. Validate the webhook signature to prevent fake requests
-   * 2. Extract transaction ID for quick acknowledgment
-   * 3. Return immediate acknowledgment (200 OK) to Blockradar
-   * 4. Process the transaction asynchronously in the background
-   * 
-   * @param payload - Complete webhook data from Blockradar
-   * @Headers ('x-blockradar-signature') signature: string
-   * @param signature - Security signature to validate webhook authenticity
-   * @returns Acknowledgment with transaction ID
+   * Validates the webhook signature using the appropriate API key based on the event data
    */
-  @Post('webhook/blockradar')
-  @ApiOperation({
-    summary: 'Handle blockchain transaction webhook',
-    description: 'Processes blockchain transaction webhooks from Blockradar'
-  })
   @Public()
-  @SetMetadata('custom_response', true)
-  async handleBlockradarWebhook(@Body() payload: any, @Res() res: Response) {
+  @Post('webhook/blockradar')
+  @HttpCode(200)
+  async handleBlockradarWebhook(
+    @Body() payload: any,
+    @Headers('x-blockradar-signature') signature: string,
+    @Res() res: Response
+  ) {
     try {
       // Quick return for non-deposit.success events
       if (payload?.event !== 'deposit.success' && payload?.data?.event !== 'deposit.success') {
         return res.status(200).send();
       }
 
+      // Log incoming webhook data (sanitized)
+      this.logger.debug(`Received webhook payload: ${JSON.stringify(payload)}`);
+      this.logger.debug(`Received signature: ${signature}`);
+
+      // Validate webhook signature using the appropriate API key
+      const isValid = this.validateSignatureService.validateSignature(payload, signature);
+      
+      if (!isValid) {
+        this.logger.warn('Invalid webhook signature');
+        throw new UnauthorizedException('Invalid webhook signature');
+      }
+
       const transactionId = payload.data?.id;
       const recipientAddress = payload.data?.recipientAddress;
       
       if (!transactionId || !recipientAddress) {
+        this.logger.warn('Missing required fields in webhook payload');
         return res.status(200).send();
       }
 
-      // Start transaction
-      await this.dataSource.transaction(async (transactionalEntityManager) => {
-        // Check for duplicate using transactionId as idempotency key
-        const existingTx = await transactionalEntityManager
-          .getRepository(Transaction)
-          .findOne({
-            where: { transactionId },
-            select: ['id', 'status']
-          });
+      // Find business by recipient address
+      const business = await this.sortTransactionService.findBusinessForTransaction(recipientAddress);
+      
+      if (!business) {
+        this.logger.warn(`No business found for recipient address ${recipientAddress}`);
+        return res.status(200).send();
+      }
 
-        if (existingTx) {
-          // If exists and Unsettled, ensure it's in Redis queue
-          if (existingTx.status === TransactionStatus.UNSETTLED) {
-            const isInQueue = await this.redisService.get(`tx:${transactionId}`);
-            if (!isInQueue) {
-              await this.queueService.addToQueue('transaction-processing', {
-                transactionId,
-                status: TransactionStatus.UNSETTLED
-              });
-              await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
-            }
-          }
-          return;
-        }
-
-        // Find business by recipient address (which is the wallet address)
-        const business = await transactionalEntityManager
-          .getRepository(Business)
-          .findOne({
-            where: { walletAddress: recipientAddress }
-          });
-
-        if (!business) {
-          this.logger.warn(`No business found for recipient address ${recipientAddress}`);
-          return;
-        }
-
-        // Save transaction with Unsettled status
-        const transaction = await transactionalEntityManager
-          .getRepository(Transaction)
-          .save({
-            transactionId,
-            businessId: business.id,
-            tokenAmount: parseFloat(payload.data.amount),
-            token: payload.data.asset?.symbol || payload.data.currency,
-            chain: this.walletConfigService.getBlockchainName(payload),
-            status: TransactionStatus.UNSETTLED,
-            senderAddress: payload.data.senderAddress || 'unknown',
-            businessAddress: recipientAddress,
-            metadata: payload.data,
-            receivedAt: new Date()
-          });
-
-        // Add to queue and Redis after successful save
-        await this.queueService.addToQueue('transaction-processing', {
-          transactionId: transaction.id,
-          status: TransactionStatus.UNSETTLED
-        });
-        await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
-        
-        this.logger.log(`Transaction ${transactionId} saved and queued`);
-      });
+      // Save and queue transaction
+      await this.sortTransactionService.saveTransactionToBusiness(payload, business);
 
       return res.status(200).send();
     } catch (error) {
-      this.logger.error(`Error processing transaction: ${error.message}`);
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(`Error processing webhook: ${error.message}`, error.stack);
       return res.status(200).send();
     }
   }

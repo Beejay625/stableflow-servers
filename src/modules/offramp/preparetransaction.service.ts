@@ -5,8 +5,9 @@ import { ConfigService } from '@nestjs/config';
 
 import { Transaction as WalletTransaction } from '../wallet/entities/transaction.entity';
 import { Transaction } from './interfaces/transaction.interface';
-import { getTokenAddress, mapNetworkFromConfig } from './utils';
+import { getTokenAddress, mapNetworkFromConfig, getTokenInfoByAddress } from './utils';
 import { TransactionStatus } from '../wallet/constants/status.enum';
+import { PaycrestService } from '../paycrest/paycrest.service';
 
 /**
  * Service responsible for preparing transaction data for offramp processing
@@ -21,6 +22,7 @@ export class PrepareTransactionService {
     private readonly configService: ConfigService,
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
+    private readonly paycrestService: PaycrestService,
   ) {
     this.configNetwork = this.configService.get<string>('blockradar.network');
     this.logger.log(`PrepareTransactionService initialized for network config: ${this.configNetwork}`);
@@ -33,7 +35,8 @@ export class PrepareTransactionService {
    * 1. Retrieve transaction and associated business data
    * 2. Validate required bank details
    * 3. Map token symbol to blockchain address based on chain and network config
-   * 4. Format data for offramp processing
+   * 4. Get token rate from Paycrest service
+   * 5. Format data for offramp processing
    * 
    * @param transactionId - The ID of the transaction to process
    * @returns Promise<Transaction> - Transaction details formatted for offramp
@@ -80,11 +83,73 @@ export class PrepareTransactionService {
       if (!tokenAddress) {
         throw new Error(`Token address not found for ${transaction.token} on network ${network}`);
       }
+      
+      // Step 5: Get token information to retrieve correct decimals
+      const tokenInfo = getTokenInfoByAddress(tokenAddress);
+      if (!tokenInfo) {
+        throw new Error(`Token information not found for ${transaction.token} on network ${network}`);
+      }
+      
+      const tokenDecimals = tokenInfo.decimals;
+      this.logger.log(`Using token decimals: ${tokenDecimals} for ${transaction.token}`);
+      
+      // Step 6: Get token rate from Paycrest service - always use NGN as fiat
+      const fiat = 'NGN';
+      // Ensure token symbol is uppercase for rate fetching
+      const tokenSymbol = transaction.token.toUpperCase();
+      
+      // Log the transaction amount for debugging
+      this.logger.log(`Original transaction amount: ${transaction.tokenAmount}, type: ${typeof transaction.tokenAmount}`);
+      const amountStr = transaction.tokenAmount.toString();
+      this.logger.log(`Fetching token rate for ${tokenSymbol}/${fiat}, amount: ${amountStr}`);
+      
+      // Try up to 3 times to get a valid rate
+      let rateResponse;
+      let retries = 0;
+      let rate = 0;
+      
+      while (retries < 3) {
+        rateResponse = await this.paycrestService.getTokenRate(
+          tokenSymbol, 
+          amountStr,
+          fiat
+        );
+        
+        this.logger.log(`[DEBUG] Raw rate response: ${JSON.stringify(rateResponse)}`);
+        
+        // Handle case where data is the rate itself (as string)
+        if (rateResponse.status === 'success') {
+          if (typeof rateResponse.data === 'string') {
+            rate = parseFloat(rateResponse.data);
+          } else if (rateResponse.data && rateResponse.data.rate) {
+            // Handle case where data is an object with rate property
+            rate = parseFloat(rateResponse.data.rate);
+          }
+          
+          if (rate > 0) {
+            this.logger.log(`Received valid rate: ${rate} for ${tokenSymbol}/${fiat}`);
+            break;
+          }
+        }
+        
+        retries++;
+        this.logger.warn(`Attempt ${retries}: Failed to get valid rate for ${tokenSymbol}/${fiat}, received: ${JSON.stringify(rateResponse)}`);
+        
+        // Wait a short time before retrying
+        if (retries < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1000)); 
+        }
+      }
+      
+      // If we still don't have a valid rate after retries, throw an error
+      if (rate <= 0) {
+        throw new Error(`Failed to get valid exchange rate for ${tokenSymbol}/${fiat} after ${retries} attempts`);
+      }
 
-      // Step 5: Format data for offramp processing
+      // Step 7: Format data for offramp processing
       const currency = bankDetails.bankCode.startsWith('0') ? 'NGN' : 'KES';
       
-      // Step 6: Return properly formatted transaction
+      // Step 8: Return properly formatted transaction
       return {
         id: transaction.transactionId,
         senderAddress: transaction.businessAddress,
@@ -93,13 +158,17 @@ export class PrepareTransactionService {
         institution: bankDetails.bankCode,
         tokenAddress,
         token: transaction.token,
-        tokenDecimals: 18, // Most ERC20 tokens use 18 decimals
+        tokenDecimals: tokenDecimals, // Use actual token decimals, never use fallback
+        tokenSymbol: transaction.token,
         amount: transaction.tokenAmount,
         currency,
-        rate: 0, // Rate will be determined by the offramp provider
+        rate: Math.round(rate * 100), // Convert rate to basis points (multiply by 100)
         refundAddress: transaction.businessAddress,
         status: TransactionStatus.PENDING,
         network,
+        chain: transaction.chain,
+        walletId: transaction.walletId,
+        addressId: transaction.addressId,
         memo: `Offramp for transaction ${transaction.transactionId}`
       };
     } catch (error) {
