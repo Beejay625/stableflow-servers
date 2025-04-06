@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
-import { BusinessService } from '../modules/business/business.service';
+import { BusinessService } from '../modules/business/services/business.service';
 
 async function getBusinessResponse() {
   try {

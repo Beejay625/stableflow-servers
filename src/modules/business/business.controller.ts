@@ -33,7 +33,7 @@ import {
   ApiBearerAuth,
   ApiProperty
 } from '@nestjs/swagger';
-import { BusinessService } from './business.service';
+import { BusinessService } from './services/business.service';
 import { BusinessDto } from './dto/update-business.dto';
 import { LinkBankDto } from './dto/link-bank.dto';
 import { SimplifiedBusinessResponseDto, SimplifiedCategoryDto } from './dto/business-response.dto';

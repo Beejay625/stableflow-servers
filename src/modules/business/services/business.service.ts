@@ -1,25 +1,24 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Inject, forwardRef, RequestTimeoutException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, Brackets } from 'typeorm';
-import { Business, OnboardingStep } from './entities/business.entity';
-// Import the Category entity class but use it only for type checking
-import { Category } from './entities/category.entity';
-import { BusinessDto } from './dto/update-business.dto';
-import { LinkBankDto } from './dto/link-bank.dto';
-import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse, NigerianBank, NigerianBankResponse, BankValidationResponse } from './interfaces/business.interface';
-import { NubapiResponse } from './interfaces';
-import { SimplifiedBusinessResponseDto, BusinessResponseDto, WalletDetailsDto } from './dto/business-response.dto';
-import { PaycrestService } from '../paycrest/paycrest.service';
-import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../paycrest/interfaces';
+import { Business, OnboardingStep } from '../entities/business.entity';
+import { Category } from '../entities/category.entity';
+import { BusinessDto } from '../dto/update-business.dto';
+import { LinkBankDto } from '../dto/link-bank.dto';
+import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse, NigerianBank, NigerianBankResponse, BankValidationResponse } from '../interfaces/business.interface';
+import { NubapiResponse } from '../interfaces';
+import { SimplifiedBusinessResponseDto, BusinessResponseDto, WalletDetailsDto } from '../dto/business-response.dto';
+import { PaycrestService } from '../../paycrest/paycrest.service';
+import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../../paycrest/interfaces';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-import { NUBAPI_TOKEN } from '../../common/constants/env.constants';
-import { VerifyBankDto } from './dto/verify-bank.dto';
-import { WalletService } from '../wallet/wallet.service';
-import { BankDetails, AccountType } from './entities/bank-details.entity';
+import { NUBAPI_TOKEN } from '../../../common/constants/env.constants';
+import { VerifyBankDto } from '../dto/verify-bank.dto';
+import { WalletService } from '../../wallet/wallet.service';
+import { BankDetails, AccountType } from '../entities/bank-details.entity';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
-import { retryWithBackoff } from '../../common/utils/api-utils';
+import { retryWithBackoff } from '../../../common/utils/api-utils';
 
 // Define the UpdateBusinessOptions type
 type UpdateBusinessOptions = {
@@ -339,7 +338,7 @@ export class BusinessService {
             where: { id, ownerId },
             relations: ['category', 'bankDetails'],
             lock: { mode: 'pessimistic_write' },
-          });
+          }) as Business;
 
           // Generate wallet if needed using centralized method
           const { walletDetails } = await this.generateWalletWithRetries(lockedBusiness, queryRunner);
@@ -348,7 +347,7 @@ export class BusinessService {
             // Refresh business object with new wallet details
             lockedBusiness.walletAddress = walletDetails.address;
             lockedBusiness.addressId = walletDetails.id;
-            await queryRunner.manager.save(lockedBusiness);
+            await queryRunner.manager.save(Business, lockedBusiness);
             
             // Update our reference to use in response
             Object.assign(business, lockedBusiness);
@@ -707,7 +706,7 @@ export class BusinessService {
       const business = await queryRunner.manager.findOne(Business, {
         where: { id, ...(ownerId ? { ownerId } : {}) },
         relations: ['category', 'bankDetails'],
-      });
+      }) as Business;
 
       if (!business) {
         throw new NotFoundException(`Business with ID ${id} not found`);
