@@ -61,11 +61,13 @@ export class SortTransactionService {
    * Save transaction to a business and queue it for processing using the same logic as webhook handler
    * @param payload - The webhook payload containing transaction data
    * @param business - The business entity
+   * @param shouldQueue - Whether to queue the transaction for processing (defaults to true)
    * @returns Promise<Transaction> - The saved transaction
    */
   async saveTransactionToBusiness(
     payload: any,
-    business: Business
+    business: Business,
+    shouldQueue: boolean = true
   ): Promise<Transaction> {
     const transactionId = payload.data?.id;
 
@@ -81,8 +83,8 @@ export class SortTransactionService {
           });
 
         if (existingTx) {
-          // If exists and Unsettled, ensure it's in Redis queue
-          if (existingTx.status === TransactionStatus.UNSETTLED) {
+          // If exists and Unsettled, ensure it's in Redis queue if shouldQueue is true
+          if (existingTx.status === TransactionStatus.UNSETTLED && shouldQueue) {
             const isInQueue = await this.redisService.get(`tx:${transactionId}`);
             if (!isInQueue) {
               await this.queueService.addToQueue('transaction-processing', {
@@ -112,14 +114,18 @@ export class SortTransactionService {
             receivedAt: new Date()
           });
 
-        // Add to queue and Redis after successful save
-        await this.queueService.addToQueue('transaction-processing', {
-          transactionId,
-          status: TransactionStatus.UNSETTLED
-        });
-        await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
+        // Add to queue and Redis after successful save if shouldQueue is true
+        if (shouldQueue) {
+          await this.queueService.addToQueue('transaction-processing', {
+            transactionId,
+            status: TransactionStatus.UNSETTLED
+          });
+          await this.redisService.setKey(`tx:${transactionId}`, 'queued', 86400); // 24 hours expiry
+          this.logger.log(`Transaction ${transactionId} saved and queued`);
+        } else {
+          this.logger.log(`Transaction ${transactionId} saved but not queued (business inactive or not approved)`);
+        }
         
-        this.logger.log(`Transaction ${transactionId} saved and queued`);
         return transaction;
       });
     } catch (error) {

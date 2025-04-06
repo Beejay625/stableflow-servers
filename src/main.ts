@@ -32,6 +32,7 @@ async function findAvailablePort(startPort: number, maxAttempts = 20): Promise<n
   throw new Error(`Could not find an available port after ${maxAttempts} attempts starting from ${startPort}`);
 }
 
+
 async function bootstrap() {
   // Check if clustering is enabled via env var
   const enableClustering = process.env.ENABLE_CLUSTERING === 'true';
@@ -130,7 +131,54 @@ async function bootstrap() {
             )
             .build();
           const document = SwaggerModule.createDocument(app, config);
-          SwaggerModule.setup('api/v1/docs', app, document);
+
+          // Custom initialization to persist auth token
+          const customOptions = {
+            customSiteTitle: 'StableFlow API Documentation',
+            customJs: [
+              `
+                window.onload = function() {
+                  // Restore token if it exists in localStorage
+                  const token = localStorage.getItem('swagger_token');
+                  if (token) {
+                    const authInput = document.querySelector('.auth-wrapper input[type="text"]');
+                    const authorizeBtn = document.querySelector('.auth-wrapper .authorize');
+                    if (authInput && authorizeBtn) {
+                      authInput.value = token;
+                      authorizeBtn.click();
+                    }
+                  }
+
+                  // Watch for token changes
+                  const targetNode = document.querySelector('.auth-wrapper');
+                  if (targetNode) {
+                    const observer = new MutationObserver(function(mutations) {
+                      mutations.forEach(function(mutation) {
+                        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                          const authInput = document.querySelector('.auth-wrapper input[type="text"]');
+                          if (authInput && authInput.value) {
+                            localStorage.setItem('swagger_token', authInput.value);
+                          } else {
+                            localStorage.removeItem('swagger_token');
+                          }
+                        }
+                      });
+                    });
+
+                    observer.observe(targetNode, {
+                      attributes: true,
+                      subtree: true
+                    });
+                  }
+                }
+              `
+            ],
+            swaggerOptions: {
+              persistAuthorization: true
+            }
+          };
+
+          SwaggerModule.setup('api/v1/docs', app, document, customOptions);
         }
 
         // Get preferred port from config

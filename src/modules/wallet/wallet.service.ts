@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, InternalServerErrorException, BadRequestException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -43,7 +43,7 @@ export class WalletService {
     }
     
     // Business is ready if it has completed onboarding and doesn't have a wallet address yet
-    const isReady = business.onboardingStep === OnboardingStep.COMPLETED && !business.walletAddress;
+    const isReady = business.onboardingStep === OnboardingStep.APPROVED && !business.walletAddress;
     
     this.logger.log(`Business ${businessId} is ${isReady ? 'ready' : 'not ready'} for wallet generation`);
     return isReady;
@@ -61,6 +61,7 @@ export class WalletService {
     
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
+      relations: ['category']
     });
     
     if (!business) {
@@ -68,10 +69,11 @@ export class WalletService {
       throw new NotFoundException(`Business with ID ${businessId} not found`);
     }
     
-    // Check if the business is in the COMPLETED onboarding step
-    if (business.onboardingStep !== OnboardingStep.COMPLETED) {
-      this.logger.error(`Business ${businessId} is not ready for wallet generation (onboardingStep: ${business.onboardingStep})`);
-      throw new InternalServerErrorException(`Business must complete onboarding before generating a wallet address`);
+    // Check if business is ready for wallet generation
+    const isReady = business.onboardingStep === OnboardingStep.APPROVED && !business.walletAddress;
+    if (!isReady) {
+      this.logger.warn(`Business ${businessId} is not ready for wallet generation. Status: ${business.onboardingStep}, Has wallet: ${!!business.walletAddress}`);
+      return null;
     }
     
     // Check if the business already has a wallet address
@@ -98,6 +100,7 @@ export class WalletService {
     // Validate business exists
     const business = await this.businessRepository.findOne({
       where: { id: businessId },
+      relations: ['category']
     });
     
     if (!business) {
@@ -115,18 +118,25 @@ export class WalletService {
       throw new NotFoundException(`User with ID ${userId} not found`);
     }
     
+    if (business.onboardingStep !== OnboardingStep.APPROVED) {
+      throw new BadRequestException('Business must be approved before generating a wallet');
+    }
+    
     try {
       // Format business name for BlockRadar (replace spaces with underscores)
       const formattedBusinessName = business.name.replace(/\s+/g, '_');
       
-      // Get BlockRadar API key and wallet ID from config
-      const apiKey = this.configService.get<string>('blockradar.apiKey') || 
-                     this.configService.get<string>('BLOCKRADAR_API_KEY');
-      const walletId = this.configService.get<string>('blockradar.walletId') ||
-                       this.configService.get<string>('WALLET_ID');
+      // Get BEP20 USDT configuration
+      const bep20Config = this.configService.get('bep20usdt');
+      if (!bep20Config) {
+        throw new Error('BEP20 USDT configuration is not available');
+      }
+
+      const apiKey = bep20Config.apiKey;
+      const walletId = bep20Config.walletId;
       
       if (!apiKey || !walletId) {
-        throw new Error('BlockRadar API key or wallet ID is not configured');
+        throw new Error('wallet id and api key are not available'); 
       }
       
       // Prepare request data
@@ -137,6 +147,7 @@ export class WalletService {
         metadata: {
           business_id: businessId,
           user_id: userId,
+          wallet_type: 'bep20usdt'
         },
         name: `${formattedBusinessName}_${businessId}`,
         showPrivateKey: false,

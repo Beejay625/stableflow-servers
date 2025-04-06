@@ -109,8 +109,16 @@ export class WalletController {
         return res.status(200).send();
       }
 
+      // Check if business is active and approved
+      if (!business.isActive || business.onboardingStep !== 'APPROVED') {
+        this.logger.warn(`Business ${business.id} is not active or not approved. isActive: ${business.isActive}, onboardingStep: ${business.onboardingStep}`);
+        // Save transaction but don't queue it
+        await this.sortTransactionService.saveTransactionToBusiness(payload, business, false);
+        return res.status(200).send();
+      }
+
       // Save and queue transaction
-      await this.sortTransactionService.saveTransactionToBusiness(payload, business);
+      await this.sortTransactionService.saveTransactionToBusiness(payload, business, true);
 
       return res.status(200).send();
     } catch (error) {

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsEnum, IsOptional, ValidateIf, IsNotEmpty } from 'class-validator';
+import { IsString, IsEnum, IsOptional, ValidateIf, IsNotEmpty, IsEmpty } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AccountType } from '../entities/business.entity';
 
@@ -15,8 +15,10 @@ export class LinkBankDto {
   })
   @IsOptional()
   @IsString()
-  @ValidateIf(o => !o.bankName)
+  @ValidateIf((o) => !o.bankName)
   @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
+  @ValidateIf((o) => o.bankName)
+  @IsEmpty({ message: 'Cannot provide both bankCode and bankName' })
   bankCode?: string;
 
   @ApiProperty({
@@ -26,8 +28,10 @@ export class LinkBankDto {
   })
   @IsOptional()
   @IsString()
-  @ValidateIf(o => !o.bankCode)
+  @ValidateIf((o) => !o.bankCode)
   @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
+  @ValidateIf((o) => o.bankCode)
+  @IsEmpty({ message: 'Cannot provide both bankCode and bankName' })
   bankName?: string;
 
   @ApiProperty({

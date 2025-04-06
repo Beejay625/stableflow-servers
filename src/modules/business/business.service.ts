@@ -33,10 +33,11 @@ type UpdateBusinessOptions = {
 @Injectable()
 export class BusinessService {
   private readonly logger = new Logger(BusinessService.name);
-  // Cache for Nigerian banks to avoid repeated API calls
   private nigerianBanksCache: Institution[] = null;
   private nigerianBanksCacheTimestamp: number = 0;
   private readonly CACHE_TTL_MS = 3600000; // 1 hour
+  private readonly BANK_VERIFY_TIMEOUT = 10000; // 10 seconds
+  private readonly WALLET_GENERATE_TIMEOUT = 20000; // 20 seconds
 
   constructor(
     @InjectRepository(Business)
@@ -174,13 +175,22 @@ export class BusinessService {
         const updatedPhoneNumber = updateFields.phoneNumber !== undefined ? updateFields.phoneNumber : business.phoneNumber;
         const updatedCategory = category || business.category;
         
-        // Check if all required fields for BUSINESS_SETUP step are completed
-        if (business.onboardingStep === OnboardingStep.NOT_STARTED && 
-            updatedName && updatedPhoneNumber && updatedCategory) {
-          this.logger.log(`Business ${id} has completed required fields. Moving to BUSINESS_SETUP stage.`);
+        // Create temporary business object to validate
+        const tempBusiness = new Business();
+        Object.assign(tempBusiness, business, {
+          name: updatedName,
+          phoneNumber: updatedPhoneNumber,
+          category: updatedCategory,
+          categoryId: updatedCategory?.id
+        });
+
+        const { newStep, changes: onboardingChanges } = await this.updateOnboardingStep(tempBusiness, transactionalEntityManager);
+        
+        if (newStep !== business.onboardingStep) {
           previousValues.onboardingStep = business.onboardingStep;
-          updateFields.onboardingStep = OnboardingStep.BUSINESS_SETUP;
+          updateFields.onboardingStep = newStep;
           updatedFields.push('onboardingStep');
+          updatedFields.push(...onboardingChanges);
         }
 
         // Update the business entity within the transaction
@@ -244,6 +254,56 @@ export class BusinessService {
   }
 
   /**
+   * Centralized wallet generation with retries and error handling
+   * @param business Business entity
+   * @param queryRunner Optional query runner for transaction support
+   * @returns Generated wallet details and changes
+   */
+  private async generateWalletWithRetries(
+    business: Business,
+    queryRunner?: any
+  ): Promise<{ walletDetails: any; changes: string[] }> {
+    const changes: string[] = [];
+    
+    if (!business || business.onboardingStep !== OnboardingStep.APPROVED || business.walletAddress) {
+      return { walletDetails: null, changes };
+    }
+
+    try {
+      // Generate wallet with timeout
+      const walletResult = await Promise.race([
+        this.walletService.generateWalletForCompletedBusiness(business.id),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Wallet generation timeout')), this.WALLET_GENERATE_TIMEOUT)
+        )
+      ]);
+
+      if (walletResult?.data?.address) {
+        changes.push('wallet_generated');
+        
+        // Update business with wallet details
+        const updateData = {
+          walletAddress: walletResult.data.address,
+          addressId: walletResult.data.id
+        };
+
+        if (queryRunner) {
+          await queryRunner.manager.update(Business, business.id, updateData);
+        } else {
+          await this.businessRepository.update(business.id, updateData);
+        }
+
+        return { walletDetails: walletResult.data, changes };
+      }
+      
+      throw new Error('Invalid wallet generation response');
+      } catch (error) {
+      this.logger.error(`Error generating wallet for business ${business.id}: ${error.message}`, error.stack);
+      return { walletDetails: null, changes };
+    }
+  }
+
+  /**
    * Retrieves a business by ID
    * @param id Business ID
    * @param ownerId ID of the user who owns the business (optional for public access)
@@ -251,71 +311,377 @@ export class BusinessService {
    */
   async getBusinessById(id: string, ownerId: string): Promise<BusinessResponseDto> {
     this.logger.log(`Fetching business with ID ${id} for owner ${ownerId}`);
-    const business = await this.validateAndGetBusiness(id, ownerId);
-    
-    // Check if the business has completed onboarding but doesn't have a wallet yet
-    if (business.onboardingStep === OnboardingStep.COMPLETED && !business.walletAddress) {
-      try {
-        this.logger.log(`Business ${id} has completed onboarding but doesn't have a wallet. Generating wallet address.`);
-        
-        // For the specific issue the user is experiencing, try immediate wallet generation
-        if (id === '0ccd672d-9163-4efd-9d9a-cb535856b8cd') {
-          try {
-            this.logger.log(`Special case for business ID ${id} - attempting immediate wallet generation`);
-            const result = await this.walletService.generateWalletForCompletedBusiness(business.id);
-            
-            if (result && result.data) {
-              // Fetch the updated business to see if a wallet address was saved
-              const updatedBusiness = await this.validateAndGetBusiness(id, ownerId);
-              
-              if (updatedBusiness.walletAddress) {
-                this.logger.log(`Wallet address ${updatedBusiness.walletAddress} generated for business ${business.id}`);
-                
-                const businessResponseDto = new BusinessResponseDto();
-                businessResponseDto.statusCode = 200;
-                businessResponseDto.message = 'Success';
-                businessResponseDto.data = this.toSimplifiedResponse(updatedBusiness);
-                
-                return businessResponseDto;
-              }
-            }
-          } catch (walletError) {
-            this.logger.error(`Failed immediate wallet generation for business ${business.id}: ${walletError.message}`, walletError.stack);
-          }
-        }
-        
-        // Generate wallet in the background to avoid blocking the response
-        this.generateWalletForBusiness(business.id)
-          .then(result => {
-            if (result && result.data) {
-              // Fetch the business to verify the wallet address was saved
-              this.businessRepository.findOne({ where: { id: business.id } })
-                .then(updatedBusiness => {
-                  if (updatedBusiness && updatedBusiness.walletAddress) {
-                    this.logger.log(`Wallet address ${updatedBusiness.walletAddress} generated for business ${business.id}`);
-                  } else {
-                    this.logger.log(`Wallet generation result returned for business ${business.id} but address not saved`);
-                  }
-                });
-            } else {
-              this.logger.log(`Wallet generation initiated for business ${business.id}`);
-            }
-          })
-          .catch(error => {
-            this.logger.error(`Failed to generate wallet for business ${business.id}: ${error.message}`, error.stack);
-          });
-      } catch (error) {
-        // Log the error but don't fail the request if wallet creation fails
-        this.logger.error(`Error generating wallet: ${error.message}`, error.stack);
-      }
-    }
     
     const businessResponseDto = new BusinessResponseDto();
     businessResponseDto.statusCode = 200;
-    businessResponseDto.message = 'Success';
-    businessResponseDto.data = this.toSimplifiedResponse(business);
     
-    return businessResponseDto;
+    try {
+      // First try to get the business without locking to check existence
+      const business = await this.businessRepository.findOne({
+        where: { id, ownerId },
+        relations: ['category', 'bankDetails'],
+      });
+
+      if (!business) {
+        throw new NotFoundException(`Business with ID ${id} not found`);
+      }
+
+      // Only use transaction if we need to generate a wallet
+      if (business.onboardingStep === OnboardingStep.APPROVED && !business.walletAddress) {
+        // Use query runner for atomic operations
+    const queryRunner = this.businessRepository.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+        await queryRunner.startTransaction();
+        
+        try {
+          // Get business with lock for wallet generation
+          const lockedBusiness = await queryRunner.manager.findOne(Business, {
+            where: { id, ownerId },
+            relations: ['category', 'bankDetails'],
+            lock: { mode: 'pessimistic_write' },
+          });
+
+          // Generate wallet if needed using centralized method
+          const { walletDetails } = await this.generateWalletWithRetries(lockedBusiness, queryRunner);
+          
+          if (walletDetails) {
+            // Refresh business object with new wallet details
+            lockedBusiness.walletAddress = walletDetails.address;
+            lockedBusiness.addressId = walletDetails.id;
+            await queryRunner.manager.save(lockedBusiness);
+            
+            // Update our reference to use in response
+            Object.assign(business, lockedBusiness);
+          }
+
+          await queryRunner.commitTransaction();
+        } catch (error) {
+          this.logger.error(`Error in wallet generation transaction: ${error.message}`, error.stack);
+          await queryRunner.rollbackTransaction();
+          // Don't throw here - we still want to return the business data
+        } finally {
+          await queryRunner.release();
+        }
+      }
+      
+      businessResponseDto.message = 'Success';
+      businessResponseDto.data = this.toSimplifiedResponse(business);
+      
+      return businessResponseDto;
+    } catch (error) {
+      this.logger.error(`Error fetching business ${id}: ${error.message}`, error.stack);
+      
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      
+      throw new InternalServerErrorException(
+        `Failed to fetch business: ${error.message}`
+      );
+    }
+  }
+
+  /**
+   * Verifies a bank account using Nubapi API
+   * @param accountNumber Account number
+   * @param bankCode Bank code
+   * @returns Promise with the verification result and account name
+   */
+  private async verifyBankAccountInternal(
+    accountNumber: string,
+    bankCode: string
+  ): Promise<{ accountName: string; responseData: NubapiResponse }> {
+      const nubapiToken = this.configService.get(NUBAPI_TOKEN);
+      if (!nubapiToken) {
+        throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
+      }
+      
+      try {
+      const verifyUrl = `https://nubapi.com/api/verify?account_number=${accountNumber}&bank_code=${bankCode}`;
+        
+        const apiResponse = await Promise.race([
+          axios.get<NubapiResponse>(verifyUrl, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${nubapiToken}`
+            }
+          }),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Bank verification timeout')), this.BANK_VERIFY_TIMEOUT)
+          )
+        ]) as { data: NubapiResponse };
+
+        const responseData = apiResponse.data;
+      const accountName = responseData.data?.account_name || responseData.account_name;
+        
+        if (!accountName) {
+          throw new BadRequestException('Could not verify account. Bank verification didn\'t return an account name.');
+        }
+
+      return { accountName, responseData };
+      } catch (error) {
+        if (error.message === 'Bank verification timeout') {
+          throw new RequestTimeoutException('Bank verification service is temporarily unavailable. Please try again.');
+        } else if (error instanceof BadRequestException) {
+          throw error;
+      }
+          throw new BadRequestException(`Could not verify account: ${error.message}`);
+        }
+      }
+
+  /**
+   * Resolves bank information from either code or name
+   * @param bankCode Optional bank code
+   * @param bankName Optional bank name
+   * @returns Resolved bank information
+   */
+  private async resolveBankInformation(
+    bankCode?: string,
+    bankName?: string
+  ): Promise<{ bankCode: string; bankName: string }> {
+    const nigerianBanks = await this.getNigerianBanks();
+
+    if (bankName && !bankCode) {
+      const foundBank = nigerianBanks.find(bank => 
+        bank.name.toLowerCase() === bankName.toLowerCase()
+      );
+      
+      if (!foundBank) {
+        throw new BadRequestException(`Bank name "${bankName}" not found in supported banks list`);
+      }
+      
+      return { bankCode: foundBank.code, bankName: foundBank.name };
+    }
+
+    if (bankCode) {
+      const foundBank = nigerianBanks.find(bank => bank.code === bankCode);
+      if (!foundBank) {
+        throw new BadRequestException(`Invalid bank code: ${bankCode}`);
+      }
+      return { bankCode, bankName: foundBank.name };
+    }
+
+    throw new BadRequestException('Either bank code or bank name must be provided');
+  }
+
+  /**
+   * Creates or updates bank details for a business
+   */
+  private async updateBusinessBankDetails(
+    business: Business,
+    bankCode: string,
+    bankName: string,
+    accountNumber: string,
+    accountName: string,
+    accountType: AccountType
+  ): Promise<{ bankDetails: BankDetails; changes: string[] }> {
+      const bankDetails = business.bankDetails || new BankDetails();
+      const previousDetails = { ...bankDetails };
+    const changes: string[] = [];
+
+      bankDetails.bankCode = bankCode;
+      bankDetails.bankName = bankName;
+    bankDetails.accountNumber = accountNumber;
+    bankDetails.accountName = accountName;
+    bankDetails.accountType = accountType;
+      bankDetails.businessId = business.id;
+      bankDetails.lastVerifiedAt = new Date();
+
+      // Track changes
+      if (previousDetails.bankCode !== bankDetails.bankCode) changes.push('bank_code_updated');
+      if (previousDetails.bankName !== bankDetails.bankName) changes.push('bank_name_updated');
+      if (previousDetails.accountNumber !== bankDetails.accountNumber) changes.push('account_number_updated');
+      if (previousDetails.accountName !== bankDetails.accountName) changes.push('account_name_updated');
+      if (previousDetails.accountType !== bankDetails.accountType) changes.push('account_type_updated');
+
+    return { bankDetails, changes };
+  }
+
+  /**
+   * Centralized bank verification with proper error handling and caching
+   * @param accountNumber Account number to verify
+   * @param bankCode Bank code
+   * @param bankName Optional bank name
+   * @returns Verified bank details with account name
+   */
+  public async verifyBankDetails(
+    accountNumber: string,
+    bankCode?: string,
+    bankName?: string
+  ): Promise<{ bankCode: string; bankName: string; accountName: string; responseData: NubapiResponse }> {
+    try {
+      // First resolve bank information
+      const resolvedBank = await this.resolveBankInformation(bankCode, bankName);
+      
+      // Then verify the account
+      const { accountName, responseData } = await this.verifyBankAccountInternal(
+        accountNumber,
+        resolvedBank.bankCode
+      );
+
+      return {
+        bankCode: resolvedBank.bankCode,
+        bankName: resolvedBank.bankName,
+        accountName,
+        responseData
+      };
+    } catch (error) {
+      this.logger.error(`Bank verification failed: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Validates business details for onboarding
+   * @param business Business entity
+   * @returns validation result and reason
+   */
+  private validateBusinessDetails(business: Business): { isValid: boolean; reason?: string } {
+    const errors: string[] = [];
+
+    if (!business.name || business.name.trim().length === 0) {
+      errors.push('Business name is required');
+    }
+
+    if (!business.phoneNumber || !/^\+[1-9]\d{1,14}$/.test(business.phoneNumber)) {
+      errors.push('Valid phone number in international format is required');
+    }
+
+    if (!business.category || !business.categoryId) {
+      errors.push('Business category is required');
+    } else if (!business.category.isActive) {
+      errors.push('Selected category is not active');
+    }
+
+    // Check for invalid state: bank details in NOT_STARTED
+    if (business.onboardingStep === OnboardingStep.NOT_STARTED && business.bankDetails) {
+      errors.push('Cannot have bank details in NOT_STARTED state. Complete business setup first');
+    }
+
+    if (errors.length > 0) {
+      return { isValid: false, reason: errors.join(', ') };
+    }
+
+    return { isValid: true };
+  }
+
+  /**
+   * Validates bank details for onboarding
+   * @param bankDetails Bank details entity
+   * @returns validation result and reason
+   */
+  private validateBankDetails(bankDetails: BankDetails): { isValid: boolean; reason?: string } {
+    if (!bankDetails) {
+      return { isValid: false, reason: 'Bank details are required' };
+    }
+
+    if (!bankDetails.bankCode || !bankDetails.bankName) {
+      return { isValid: false, reason: 'Bank information is incomplete' };
+    }
+
+    if (!bankDetails.accountNumber || !bankDetails.accountName) {
+      return { isValid: false, reason: 'Account information is incomplete' };
+    }
+
+    if (!bankDetails.accountType) {
+      return { isValid: false, reason: 'Account type is required' };
+    }
+
+    return { isValid: true };
+  }
+
+  /**
+   * Updates business onboarding step based on current state
+   * @param business Business entity
+   * @returns Updated onboarding step and changes
+   */
+  private async updateOnboardingStep(
+    business: Business,
+    queryRunner: any
+  ): Promise<{ newStep: OnboardingStep; changes: string[]; error?: string }> {
+    const changes: string[] = [];
+    let newStep = business.onboardingStep;
+    let error: string | undefined;
+
+    // Validate current state and determine next step
+    switch (business.onboardingStep) {
+      case OnboardingStep.NOT_STARTED: {
+        const { isValid, reason } = this.validateBusinessDetails(business);
+        if (isValid) {
+          newStep = OnboardingStep.BUSINESS_SETUP;
+          changes.push('business_details_completed');
+        } else {
+          error = `Cannot progress from NOT_STARTED: ${reason}`;
+          this.logger.warn(`Business ${business.id} validation failed: ${reason}`);
+        }
+        break;
+      }
+
+      case OnboardingStep.BUSINESS_SETUP: {
+        // First validate business details are still valid
+        const businessValid = this.validateBusinessDetails(business);
+        if (!businessValid.isValid) {
+          error = `Invalid business details: ${businessValid.reason}`;
+          newStep = OnboardingStep.NOT_STARTED;
+          changes.push('reverted_to_not_started');
+          break;
+        }
+
+        const { isValid, reason } = this.validateBankDetails(business.bankDetails);
+        if (isValid) {
+          newStep = OnboardingStep.ACCOUNT_SETUP;
+          changes.push('bank_details_completed');
+        } else {
+          error = `Cannot progress from BUSINESS_SETUP: ${reason}`;
+          this.logger.warn(`Business ${business.id} bank validation failed: ${reason}`);
+        }
+        break;
+      }
+
+      case OnboardingStep.ACCOUNT_SETUP: {
+        // No automatic transition - requires admin approval
+        // But validate both business and bank details are still valid
+        const businessValid = this.validateBusinessDetails(business);
+        const bankValid = this.validateBankDetails(business.bankDetails);
+        
+        if (!businessValid.isValid || !bankValid.isValid) {
+          error = `Invalid state: ${businessValid.reason || ''} ${bankValid.reason || ''}`.trim();
+          // Determine which state to revert to
+          if (!businessValid.isValid) {
+            newStep = OnboardingStep.NOT_STARTED;
+            changes.push('reverted_to_not_started');
+          } else {
+            newStep = OnboardingStep.BUSINESS_SETUP;
+            changes.push('reverted_to_business_setup');
+          }
+        }
+        break;
+      }
+
+      case OnboardingStep.APPROVED: {
+        // Validate everything is still valid
+        const businessValid = this.validateBusinessDetails(business);
+        const bankValid = this.validateBankDetails(business.bankDetails);
+        
+        if (!businessValid.isValid || !bankValid.isValid) {
+          error = `Invalid approved state: ${businessValid.reason || ''} ${bankValid.reason || ''}`.trim();
+          // Determine which state to revert to
+          if (!businessValid.isValid) {
+            newStep = OnboardingStep.NOT_STARTED;
+            changes.push('reverted_to_not_started');
+          } else if (!bankValid.isValid) {
+            newStep = OnboardingStep.BUSINESS_SETUP;
+            changes.push('reverted_to_business_setup');
+          } else {
+            newStep = OnboardingStep.ACCOUNT_SETUP;
+            changes.push('reverted_to_account_setup');
+          }
+        }
+        break;
+      }
+    }
+
+    return { newStep, changes, error };
   }
 
   /**
@@ -331,230 +697,113 @@ export class BusinessService {
     ownerId?: string,
   ): Promise<BusinessResponseDto> {
     this.logger.log(`Updating/linking bank account for business ${id}`);
-
-    // Start a transaction to ensure atomicity
+            const businessResponse = new BusinessResponseDto();
     const queryRunner = this.businessRepository.manager.connection.createQueryRunner();
     await queryRunner.connect();
-    
+    await queryRunner.startTransaction();
+
     try {
-      // Start transaction first before any database operations
-      await queryRunner.startTransaction();
-      
-      // Check if bank account is already linked to another business
-      // OPTIMIZATION: Only query necessary fields, and use a simpler query
-      const existingBusiness = await queryRunner.manager
-        .createQueryBuilder(Business, 'business')
-        .select(['business.id'])
-        .innerJoin('business.bankDetails', 'bankDetails')
-        .where('bankDetails.accountNumber = :accountNumber', { accountNumber: linkBankDto.accountNumber })
-        .andWhere('bankDetails.bankCode = :bankCode', { bankCode: linkBankDto.bankCode })
-        .andWhere('business.id != :id', { id })
-        .getOne();
-
-      if (existingBusiness) {
-        throw new ConflictException('Bank account already linked to another business');
-      }
-
-      // Find the business with category relation
-      const whereClause: any = { id, isActive: true };
-      if (ownerId) {
-        whereClause.ownerId = ownerId;
-      }
-      
-      // OPTIMIZATION: Remove pessimistic lock which causes issues with outer joins
+      // Get business with relations
       const business = await queryRunner.manager.findOne(Business, {
-        where: whereClause,
-        relations: ['category', 'bankDetails']
+        where: { id, ...(ownerId ? { ownerId } : {}) },
+        relations: ['category', 'bankDetails'],
       });
 
       if (!business) {
         throw new NotFoundException(`Business with ID ${id} not found`);
       }
 
-      // Check if the business setup step has been completed
+      // Validate business details first
+      const businessValidation = this.validateBusinessDetails(business);
+      if (!businessValidation.isValid) {
+        throw new BadRequestException(`Cannot link bank account: ${businessValidation.reason}`);
+      }
+
+      // Validate business is in correct state for bank account linking
       if (business.onboardingStep === OnboardingStep.NOT_STARTED) {
-        throw new BadRequestException('Business details must be set up before linking a bank account');
+        throw new BadRequestException('Cannot link bank account: Business details must be completed first');
       }
 
-      // Resolve bank code from name if provided
-      let bankCode = linkBankDto.bankCode;
-      let bankName = linkBankDto.bankName;
-      let changes: string[] = [];
+      // Rest of the bank account update logic...
+      const changes: string[] = [];
+      let hasChanges = false;
+      let bankDetails = business.bankDetails || new BankDetails();
 
-      if (bankName && !bankCode) {
-        // OPTIMIZATION: Cache bank list in memory to avoid repeated API calls
-        const nigerianBanks = await this.getNigerianBanks();
-        const foundBank = nigerianBanks.find(bank => 
-          bank.name.toLowerCase() === bankName.toLowerCase()
-        );
-        
-        if (!foundBank) {
-          throw new BadRequestException(`Bank name "${bankName}" not found in supported banks list`);
+      // Verify bank account details
+      const { bankCode, bankName, accountName } = await this.verifyBankAccount(linkBankDto);
+
+      // Helper function to track changes
+      const updateField = (field: keyof BankDetails, newValue: any, changeName: string) => {
+        if (bankDetails[field] !== newValue) {
+          bankDetails[field] = newValue;
+          changes.push(changeName);
+          hasChanges = true;
         }
-        
-        bankCode = foundBank.code;
-        bankName = foundBank.name;
-        changes.push('bank_name_resolved');
+      };
+
+      updateField('bankCode', bankCode, 'bank_code_updated');
+      updateField('bankName', bankName, 'bank_name_updated');
+      updateField('accountNumber', linkBankDto.accountNumber, 'account_number_updated');
+      updateField('accountName', accountName, 'account_name_updated');
+      updateField('accountType', linkBankDto.accountType, 'account_type_updated');
+
+      // If no changes detected and bank details already exist, return early
+      if (!hasChanges && business.bankDetails) {
+        businessResponse.statusCode = 200;
+        businessResponse.message = 'No changes needed. The provided bank details are identical to the existing ones.';
+        businessResponse.data = this.toSimplifiedResponse(business);
+        await queryRunner.commitTransaction();
+            return businessResponse;
       }
 
-      // Verify account through NubaAPI with timeout
-      const nubapiToken = this.configService.get(NUBAPI_TOKEN);
-      if (!nubapiToken) {
-        throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
+      // If this is a new bank details record, mark it as a change
+      if (!business.bankDetails) {
+        changes.push('new_bank_account_linked');
+        hasChanges = true;
       }
 
-      let accountName = null;
-      
-      try {
-        const verifyUrl = `https://nubapi.com/api/verify?account_number=${linkBankDto.accountNumber}&bank_code=${bankCode}`;
-        
-        const apiResponse = await Promise.race([
-          axios.get<NubapiResponse>(verifyUrl, {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${nubapiToken}`
-            }
-          }),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Bank verification timeout')), 10000)
-          )
-        ]) as { data: NubapiResponse };
-
-        const responseData = apiResponse.data;
-        if (responseData.data?.account_name) {
-          accountName = responseData.data.account_name;
-        } else if (responseData.account_name) {
-          accountName = responseData.account_name;
-        }
-        
-        if (!accountName) {
-          throw new BadRequestException('Could not verify account. Bank verification didn\'t return an account name.');
-        }
-      } catch (error) {
-        // Always throw an error if verification fails, don't allow fallback to manual account name
-        if (error.message === 'Bank verification timeout') {
-          throw new RequestTimeoutException('Bank verification service is temporarily unavailable. Please try again.');
-        } else if (error instanceof BadRequestException) {
-          throw error;
-        } else {
-          throw new BadRequestException(`Could not verify account: ${error.message}`);
-        }
-      }
-
-      // Create or update bank details
-      const bankDetails = business.bankDetails || new BankDetails();
-      const previousDetails = { ...bankDetails };
-
-      bankDetails.bankCode = bankCode;
-      bankDetails.bankName = bankName;
-      bankDetails.accountNumber = linkBankDto.accountNumber;
-      bankDetails.accountName = accountName; // Only use API-verified account name
-      bankDetails.accountType = linkBankDto.accountType;
       bankDetails.businessId = business.id;
       bankDetails.lastVerifiedAt = new Date();
 
-      // Track changes
-      if (previousDetails.bankCode !== bankDetails.bankCode) changes.push('bank_code_updated');
-      if (previousDetails.bankName !== bankDetails.bankName) changes.push('bank_name_updated');
-      if (previousDetails.accountNumber !== bankDetails.accountNumber) changes.push('account_number_updated');
-      if (previousDetails.accountName !== bankDetails.accountName) changes.push('account_name_updated');
-      if (previousDetails.accountType !== bankDetails.accountType) changes.push('account_type_updated');
-
-      // Update business with bank details
+      // Update business
       business.bankDetails = bankDetails;
 
-      // Update onboarding step if appropriate
-      if (business.onboardingStep === OnboardingStep.BUSINESS_SETUP) {
-        business.onboardingStep = OnboardingStep.COMPLETED;
-        changes.push('onboarding_completed');
+      // Update onboarding step with proper validation
+      const { newStep, changes: onboardingChanges, error: onboardingError } = await this.updateOnboardingStep(business, queryRunner);
+      
+      if (onboardingError) {
+        throw new BadRequestException(onboardingError);
       }
 
-      // Save the updated business within the transaction
+      if (newStep !== business.onboardingStep) {
+        business.onboardingStep = newStep;
+        changes.push(...onboardingChanges);
+      }
+
+      // Save business with bank details
       const savedBusiness = await queryRunner.manager.save(business);
 
-      // Generate wallet if needed
-      if (savedBusiness.onboardingStep === OnboardingStep.COMPLETED && !savedBusiness.walletAddress) {
-        try {
-          // OPTIMIZATION: Use a more generous timeout for wallet creation
-          const walletResult = await Promise.race([
-            this.walletService.generateWalletForCompletedBusiness(savedBusiness.id),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Wallet generation timeout')), 20000)
-            )
-          ]);
-
-          if (walletResult?.data?.address) {
-            changes.push('wallet_generated');
-            // Verify the wallet was saved
-            const updatedBusiness = await queryRunner.manager.findOne(Business, {
-              where: { id: savedBusiness.id },
-              relations: ['category', 'bankDetails']
-            });
-
-            if (!updatedBusiness?.walletAddress) {
-              throw new Error('Wallet address not saved');
-            }
-
-            // Commit the transaction only if everything succeeded
-            await queryRunner.commitTransaction();
-
-            const businessResponse = new BusinessResponseDto();
-            businessResponse.statusCode = 200;
-            businessResponse.message = changes.length > 0 
-              ? `Bank account linked successfully. Changes: ${changes.join(', ')}`
-              : 'No changes were necessary';
-            businessResponse.data = this.toSimplifiedResponse(updatedBusiness);
-            
-            return businessResponse;
-          } else {
-            throw new Error('Wallet generation failed');
-          }
-        } catch (walletError) {
-          // If wallet generation fails, rollback and ask user to try again
-          // Only rollback if transaction is still active
-          if (queryRunner.isTransactionActive) {
-            await queryRunner.rollbackTransaction();
-          }
-          throw new BadRequestException(
-            'Bank details verified but wallet generation failed. Please try again in a few minutes.'
-          );
-        }
-      }
-
-      // If no wallet needed, commit transaction
+      // Commit transaction
       await queryRunner.commitTransaction();
 
-      const businessResponse = new BusinessResponseDto();
       businessResponse.statusCode = 200;
-      businessResponse.message = changes.length > 0 
-        ? `Bank account linked successfully. Changes: ${changes.join(', ')}`
-        : 'No changes were necessary';
+      businessResponse.message = `Bank account ${business.bankDetails ? 'updated' : 'linked'} successfully. Changes: ${changes.join(', ')}`;
       businessResponse.data = this.toSimplifiedResponse(savedBusiness);
       
       return businessResponse;
     } catch (error) {
-      // Only rollback if transaction is active
-      if (queryRunner.isTransactionActive) {
         await queryRunner.rollbackTransaction();
-      }
-      
-      this.logger.error(`Error with bank account: ${error.message}`, error.stack);
-      
-      if (error instanceof BadRequestException || 
-          error instanceof NotFoundException || 
-          error instanceof InternalServerErrorException ||
-          error instanceof RequestTimeoutException ||
-          error instanceof ConflictException) {
-        throw error;
-      }
       
       if (error.message === 'Bank verification timeout') {
         throw new RequestTimeoutException('Bank verification service is temporarily unavailable. Please try again.');
+      } else if (error.message === 'Wallet generation timeout') {
+        throw new RequestTimeoutException('Wallet generation service is temporarily unavailable. Please try again.');
+      } else if (error instanceof BadRequestException) {
+        throw error;
       }
       
-      throw new BadRequestException(`Bank account operation failed: ${error.message}`);
+      throw new InternalServerErrorException(`Failed to update bank account: ${error.message}`);
     } finally {
-      // Always release the query runner
       await queryRunner.release();
     }
   }
@@ -581,11 +830,9 @@ export class BusinessService {
     // If isVerified is provided, filter by onboardingStep
     if (isVerified !== undefined) {
       if (isVerified) {
-        // For verified businesses, onboardingStep must be COMPLETED
-        whereClause.onboardingStep = OnboardingStep.COMPLETED;
+        whereClause.onboardingStep = OnboardingStep.APPROVED;
       } else {
-        // For unverified businesses, onboardingStep must not be COMPLETED
-        whereClause.onboardingStep = Not(OnboardingStep.COMPLETED);
+        whereClause.onboardingStep = Not(OnboardingStep.APPROVED);
       }
     }
 
@@ -614,35 +861,30 @@ export class BusinessService {
           business.phoneNumber &&
           (business.categoryId || business.category)
         ) {
-          this.logger.log(`Business ${business.id} has completed all required steps. Setting to COMPLETED.`);
+          this.logger.log(`Business ${business.id} has completed all required steps. Setting to APPROVED.`);
           
-          business.onboardingStep = OnboardingStep.COMPLETED;
+          business.onboardingStep = OnboardingStep.APPROVED;
           
           // Save the updated onboarding status
           const savedBusiness = await this.businessRepository.save(business);
           
-          // Generate wallet if business completed onboarding
-          if (savedBusiness.onboardingStep === OnboardingStep.COMPLETED && !savedBusiness.walletAddress) {
-            try {
-              this.logger.log(`Business ${savedBusiness.id} was marked as COMPLETED during listing. Generating wallet address.`);
-              
-              // Generate wallet in the background to avoid blocking the response
-              this.generateWalletForBusiness(savedBusiness.id)
-                .then(result => {
-                  if (result && result.data && result.data.data) {
-                    this.logger.log(`Wallet address ${result.data.data.address} generated for business ${savedBusiness.id}`);
-                  } else {
-                    this.logger.log(`Wallet generation initiated for business ${savedBusiness.id}`);
-                  }
-                })
-                .catch(error => {
-                  this.logger.error(`Failed to generate wallet for business ${savedBusiness.id}: ${error.message}`, error.stack);
+          // Generate wallet in the background with proper type handling
+          this.generateWalletWithRetries(savedBusiness)
+            .then(({ walletDetails }) => {
+              if (walletDetails) {
+                this.logger.log(`Successfully generated wallet for business ${savedBusiness.id}`);
+                // Update business with new wallet details
+                this.businessRepository.update(savedBusiness.id, {
+                  walletAddress: walletDetails.address,
+                  addressId: walletDetails.id
+                }).catch(err => {
+                  this.logger.error(`Failed to update business with wallet details: ${err.message}`);
                 });
-            } catch (error) {
-              // Log the error but don't fail the request if wallet creation fails
-              this.logger.error(`Error generating wallet: ${error.message}`, error.stack);
-            }
-          }
+              }
+            })
+            .catch(err => {
+              this.logger.error(`Background wallet generation failed: ${err.message}`);
+            });
           
           return savedBusiness;
         }
@@ -810,7 +1052,13 @@ export class BusinessService {
     response.name = business.name;
     response.phoneNumber = business.phoneNumber;
     response.onboardingStep = business.onboardingStep;
-    response.business_status = business.isActive ? 'ACTIVE' : 'INACTIVE';
+    
+    // Business status shows if business is approved
+    response.business_status = business.onboardingStep === OnboardingStep.APPROVED ? 'APPROVED' : 'NOT_APPROVED';
+    
+    // Offramp status shows if transactions can be processed
+    response.offramp_status = (business.onboardingStep === OnboardingStep.APPROVED && business.isActive) ? 'ACTIVE' : 'INACTIVE';
+    
     response.user_Id = business.ownerId;
     response.createdAt = business.createdAt;
     response.updatedAt = business.updatedAt;
@@ -840,121 +1088,304 @@ export class BusinessService {
   }
 
   /**
-   * Generates a wallet for a business
-   * @param businessId - ID of the business to generate wallet for
-   * @returns Promise with the result of wallet generation
+   * Verify bank account details with timeout
    */
-  private async generateWalletForBusiness(businessId: string): Promise<any> {
-    const attemptStart = Date.now();
+  private async verifyBankAccount(linkBankDto: LinkBankDto): Promise<{ bankCode: string; bankName: string; accountName: string }> {
+    const result = await Promise.race([
+      this.verifyBankDetails(
+        linkBankDto.accountNumber,
+        linkBankDto.bankCode,
+        linkBankDto.bankName
+      ),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Bank verification timeout')), this.BANK_VERIFY_TIMEOUT)
+      )
+    ]);
+
+    if (!result.bankCode || !result.bankName || !result.accountName) {
+      throw new BadRequestException('Invalid bank account details received from verification service');
+    }
+
+    return {
+      bankCode: result.bankCode,
+      bankName: result.bankName,
+      accountName: result.accountName
+    };
+  }
+
+  /**
+   * Admin endpoint to approve a business and trigger wallet generation
+   * @param businessId Business ID to approve
+   * @returns Updated business with standardized response format
+   */
+  async approveBusiness(businessId: string): Promise<BusinessResponseDto> {
+    this.logger.log(`Admin approving business ${businessId}`);
+    
+    const businessResponseDto = new BusinessResponseDto();
+    businessResponseDto.statusCode = 200;
+    
     try {
-      this.logger.log(`Generating wallet for business ${businessId}`);
-      
-      // Apply retry logic manually instead of using retryWithBackoff
-      let attempts = 0;
-      const maxAttempts = 3;
-      const initialDelay = 1000;
-      
-      while (attempts < maxAttempts) {
-        try {
-          const result = await this.walletService.generateWalletForCompletedBusiness(businessId);
-          
-          if (result && result.data) {
-            const elapsedMs = Date.now() - attemptStart;
-            this.logger.log(`Successfully generated wallet for business ${businessId} in ${elapsedMs}ms`);
-            
-            // Verify the wallet was properly stored
-            const updatedBusiness = await this.businessRepository.findOne({
+      // Get business with relations
+      const business = await this.businessRepository.findOne({
               where: { id: businessId },
-              select: ['id', 'walletAddress', 'addressId']
-            });
-            
-            if (updatedBusiness?.walletAddress) {
-              this.logger.log(`Verified wallet address ${updatedBusiness.walletAddress} for business ${businessId}`);
-            } else {
-              this.logger.warn(`Wallet generated but address not saved to business ${businessId}`);
-            }
-          } else {
-            this.logger.warn(`Wallet generation initiated for business ${businessId} but no data returned`);
-          }
-          
-          return result;
-        } catch (err) {
-          attempts++;
-          if (attempts >= maxAttempts) {
-            throw err; // Rethrow the error after max attempts
-          }
-          
-          this.logger.warn(
-            `Wallet generation attempt ${attempts} failed for business ${businessId}: ${err.message}. Retrying...`
-          );
-          
-          // Check if business exists before retrying
-          const business = await this.businessRepository.findOne({
-            where: { id: businessId },
-            select: ['id']
-          });
-          
-          if (!business) {
-            this.logger.error(`Failed to generate wallet: Business ${businessId} not found`);
-            throw new Error(`Business ${businessId} not found`);
-          }
-          
-          // Wait before next attempt with exponential backoff
-          const delay = initialDelay * Math.pow(2, attempts - 1);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
+        relations: ['category', 'bankDetails'],
+      });
+
+      if (!business) {
+        throw new NotFoundException(`Business with ID ${businessId} not found`);
       }
+
+      // Validate business is in ACCOUNT_SETUP state
+      if (business.onboardingStep !== OnboardingStep.ACCOUNT_SETUP) {
+        throw new BadRequestException(`Business must be in ACCOUNT_SETUP state to be approved. Current state: ${business.onboardingStep}`);
+      }
+
+      // Validate business has all required information
+      const businessValid = this.validateBusinessDetails(business).isValid;
+      const bankValid = this.validateBankDetails(business.bankDetails).isValid;
+
+      if (!businessValid || !bankValid) {
+        throw new BadRequestException('Business or bank details are incomplete');
+      }
+
+      // Update business to APPROVED state
+      business.onboardingStep = OnboardingStep.APPROVED;
+      business.isVerified = true;
+      business.isActive = true;  // Only set to active when approved
       
-      throw new Error(`Failed to generate wallet after ${maxAttempts} attempts`);
+      // Save business
+      const savedBusiness = await this.businessRepository.save(business);
+      
+      // Return success response
+      businessResponseDto.message = 'Business approved successfully';
+      businessResponseDto.data = this.toSimplifiedResponse(savedBusiness);
+      
+      return businessResponseDto;
     } catch (error) {
-      const elapsedMs = Date.now() - attemptStart;
-      this.logger.error(
-        `Failed to generate wallet for business ${businessId} after ${elapsedMs}ms: ${error.message}`, 
-        error.stack
-      );
+      this.logger.error(`Error approving business ${businessId}: ${error.message}`, error.stack);
       throw error;
     }
   }
 
   /**
-   * Verifies a bank account using Nubapi API
-   * @param accountNumber Account number
-   * @param bankCode Bank code
-   * @returns Promise with the verification result
+   * Deactivate a business - this will prevent offramp operations
    */
-  async verifyBankAccount(accountNumber: string, bankCode: string): Promise<NubapiResponse> {
+  async deactivateBusiness(businessId: string): Promise<BusinessResponseDto> {
+    this.logger.log(`Deactivating business ${businessId}`);
+    
+    const businessResponseDto = new BusinessResponseDto();
+    businessResponseDto.statusCode = 200;
+    
     try {
-      this.logger.log(`Verifying bank account: ${accountNumber}, bank code: ${bankCode}`);
-      
-      // Get the Nubapi token from configuration
-      const nubapiToken = this.configService.get(NUBAPI_TOKEN);
-      if (!nubapiToken) {
-        throw new InternalServerErrorException('NUBAPI_TOKEN is not configured');
+          const business = await this.businessRepository.findOne({
+            where: { id: businessId },
+        relations: ['category', 'bankDetails'],
+          });
+          
+          if (!business) {
+        throw new NotFoundException(`Business with ID ${businessId} not found`);
       }
+
+      // Can only deactivate approved businesses
+      if (business.onboardingStep !== OnboardingStep.APPROVED) {
+        throw new BadRequestException('Only approved businesses can be deactivated');
+      }
+
+      business.isActive = false;
+      const savedBusiness = await this.businessRepository.save(business);
+
+      businessResponseDto.message = 'Business deactivated successfully';
+      businessResponseDto.data = this.toSimplifiedResponse(savedBusiness);
       
-      // Build the API URL
-      const verifyUrl = `https://nubapi.com/api/verify?account_number=${accountNumber}&bank_code=${bankCode}`;
-      
-      // Make the request with timeout
-      const apiResponse = await Promise.race([
-        axios.get<NubapiResponse>(verifyUrl, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${nubapiToken}`
-          }
-        }),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Bank verification timeout')), 10000)
-        )
-      ]) as { data: NubapiResponse };
-      
-      return apiResponse.data;
+      return businessResponseDto;
     } catch (error) {
-      this.logger.error(`Bank verification failed: ${error.message}`, error.stack);
-      if (error.message === 'Bank verification timeout') {
-        throw new RequestTimeoutException('Bank verification service is temporarily unavailable. Please try again.');
+      this.logger.error(`Error deactivating business ${businessId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Reactivate a business - this will re-enable offramp operations
+   */
+  async reactivateBusiness(businessId: string): Promise<BusinessResponseDto> {
+    this.logger.log(`Reactivating business ${businessId}`);
+    
+    const businessResponseDto = new BusinessResponseDto();
+    businessResponseDto.statusCode = 200;
+    
+    try {
+          const business = await this.businessRepository.findOne({
+            where: { id: businessId },
+        relations: ['category', 'bankDetails'],
+          });
+          
+          if (!business) {
+        throw new NotFoundException(`Business with ID ${businessId} not found`);
       }
-      throw new BadRequestException(`Bank verification failed: ${error.message}`);
+
+      // Can only reactivate approved businesses
+      if (business.onboardingStep !== OnboardingStep.APPROVED) {
+        throw new BadRequestException('Only approved businesses can be reactivated');
+      }
+
+      business.isActive = true;
+      const savedBusiness = await this.businessRepository.save(business);
+
+      businessResponseDto.message = 'Business reactivated successfully';
+      businessResponseDto.data = this.toSimplifiedResponse(savedBusiness);
+      
+      return businessResponseDto;
+    } catch (error) {
+      this.logger.error(`Error reactivating business ${businessId}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Get businesses filtered by onboarding state
+   * @param state Onboarding state to filter by (optional)
+   * @param page Page number
+   * @param limit Items per page
+   * @returns Filtered list of businesses
+   */
+  async getBusinessesByState(
+    state?: 'APPROVED' | 'BUSINESS_SETUP' | 'NOT_STARTED' | 'all',
+    page = 1,
+    limit = 10
+  ): Promise<{ businesses: SimplifiedBusinessResponseDto[], total: number, page: number, limit: number }> {
+    this.logger.log(`Fetching businesses with state filter: ${state || 'all'}`);
+    
+    const skip = (page - 1) * limit;
+    const whereClause: any = {};
+    
+    // Add state filter if not 'all'
+    if (state && state !== 'all') {
+      whereClause.onboardingStep = state;
+      // Only include active status check for APPROVED businesses
+      if (state === 'APPROVED') {
+        whereClause.isActive = true;
+      }
+    }
+
+    try {
+      const [businesses, total] = await Promise.all([
+        this.businessRepository.find({
+          where: whereClause,
+          relations: ['category', 'bankDetails'],
+          skip,
+          take: limit,
+          order: { createdAt: 'DESC' },
+        }),
+        this.businessRepository.count({ where: whereClause }),
+      ]);
+
+      return {
+        businesses: businesses.map(business => this.toSimplifiedResponse(business)),
+        total,
+        page,
+        limit,
+      };
+    } catch (error) {
+      this.logger.error(`Error fetching businesses by state: ${error.message}`, error.stack);
+      throw new InternalServerErrorException(`Failed to fetch businesses: ${error.message}`);
+    }
+  }
+
+  /**
+   * Deactivate a business by ID or wallet address
+   * @param identifier Business ID or wallet address
+   * @param identifierType 'id' | 'wallet'
+   */
+  async deactivateBusinessByIdentifier(
+    identifier: string,
+    identifierType: 'id' | 'wallet'
+  ): Promise<BusinessResponseDto> {
+    this.logger.log(`Deactivating business by ${identifierType}: ${identifier}`);
+    
+    const businessResponseDto = new BusinessResponseDto();
+    businessResponseDto.statusCode = 200;
+    
+    try {
+      // Build query based on identifier type
+      const whereClause = identifierType === 'id' 
+        ? { id: identifier }
+        : { walletAddress: identifier };
+
+      const business = await this.businessRepository.findOne({
+        where: whereClause,
+        relations: ['category', 'bankDetails'],
+      });
+
+      if (!business) {
+        throw new NotFoundException(
+          `Business with ${identifierType} ${identifier} not found`
+        );
+      }
+
+      // Can only deactivate approved businesses
+      if (business.onboardingStep !== OnboardingStep.APPROVED) {
+        throw new BadRequestException('Only approved businesses can be deactivated');
+      }
+
+      business.isActive = false;
+      const savedBusiness = await this.businessRepository.save(business);
+
+      businessResponseDto.message = `Business deactivated successfully by ${identifierType}`;
+      businessResponseDto.data = this.toSimplifiedResponse(savedBusiness);
+      
+      return businessResponseDto;
+    } catch (error) {
+      this.logger.error(`Error deactivating business by ${identifierType} ${identifier}: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Reactivate a business by ID or wallet address
+   * @param identifier Business ID or wallet address
+   * @param identifierType 'id' | 'wallet'
+   */
+  async reactivateBusinessByIdentifier(
+    identifier: string,
+    identifierType: 'id' | 'wallet'
+  ): Promise<BusinessResponseDto> {
+    this.logger.log(`Reactivating business by ${identifierType}: ${identifier}`);
+    
+    const businessResponseDto = new BusinessResponseDto();
+    businessResponseDto.statusCode = 200;
+    
+    try {
+      // Build query based on identifier type
+      const whereClause = identifierType === 'id' 
+        ? { id: identifier }
+        : { walletAddress: identifier };
+
+      const business = await this.businessRepository.findOne({
+        where: whereClause,
+        relations: ['category', 'bankDetails'],
+      });
+
+      if (!business) {
+        throw new NotFoundException(
+          `Business with ${identifierType} ${identifier} not found`
+        );
+      }
+
+      // Can only reactivate approved businesses
+      if (business.onboardingStep !== OnboardingStep.APPROVED) {
+        throw new BadRequestException('Only approved businesses can be reactivated');
+      }
+
+      business.isActive = true;
+      const savedBusiness = await this.businessRepository.save(business);
+
+      businessResponseDto.message = `Business reactivated successfully by ${identifierType}`;
+      businessResponseDto.data = this.toSimplifiedResponse(savedBusiness);
+      
+      return businessResponseDto;
+    } catch (error) {
+      this.logger.error(`Error reactivating business by ${identifierType} ${identifier}: ${error.message}`, error.stack);
+      throw error;
     }
   }
 } 

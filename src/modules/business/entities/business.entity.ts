@@ -22,7 +22,7 @@ export const OnboardingStep = {
   NOT_STARTED: 'NOT_STARTED',
   BUSINESS_SETUP: 'BUSINESS_SETUP',
   ACCOUNT_SETUP: 'ACCOUNT_SETUP',
-  COMPLETED: 'COMPLETED'
+  APPROVED: 'APPROVED'
 } as const;
 
 export type OnboardingStep = typeof OnboardingStep[keyof typeof OnboardingStep];
@@ -35,9 +35,10 @@ export { AccountType } from './bank-details.entity';
  * Business verification follows a two-step process:
  * 1. Business entity setup
  * 2. Account details setup
+ * 3. Admin approval
  */
 @Entity('businesses')
-@Check(`"isVerified" = false OR ("onboardingStep" = 'COMPLETED')`)
+@Check(`"isVerified" = false OR ("onboardingStep" = 'APPROVED')`)
 export class Business {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -92,7 +93,7 @@ export class Business {
   })
   bankDetails: BankDetails;
 
-  @Column({ default: true })
+  @Column({ default: false })
   isActive: boolean;
 
   @CreateDateColumn()

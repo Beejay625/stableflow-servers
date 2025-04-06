@@ -173,12 +173,18 @@ export class OfframpService {
       this.logger.log(`[DEBUG] Using transaction addressId: ${transaction.addressId}`);
 
       // Step 1: Approve token spending and get transaction hash
-      this.logger.log(`[DEBUG] Approving token spending for token: ${transaction.tokenAddress}, amount: ${transaction.amount.toString()}`);
+      this.logger.log(`[DEBUG] 🏦 Token approval details:`);
+      this.logger.log(`[DEBUG] - Owner Address (from business): ${transaction.senderAddress}`);
+      this.logger.log(`[DEBUG] - Token Address: ${transaction.tokenAddress}`);
+      this.logger.log(`[DEBUG] - Gateway Address (spender): ${gatewayAddress}`);
+      this.logger.log(`[DEBUG] - Amount: ${transaction.amount.toString()}`);
+      this.logger.log(`[DEBUG] - Address ID: ${transaction.addressId}`);
+      
       const approvalTx = await this.approveTokenSpending({
         tokenAddress: transaction.tokenAddress,
         spenderAddress: gatewayAddress,
         amount: transaction.amount.toString(),
-        ownerAddress: transaction.senderAddress,
+        ownerAddress: transaction.senderAddress,  // This is already the business address from PrepareTransactionService
         walletConfig,
         addressId: transaction.addressId
       });
@@ -266,42 +272,71 @@ export class OfframpService {
       const senderFee = "0"; // No fee
       
       // Log the exact parameters being passed to the contract in the correct order
-      this.logger.log(`[DEBUG] Smart contract parameters in exact order: [
-        token: ${transaction.tokenAddress}, 
-        amount: ${amountInTokenUnits}, 
-        rate: ${rate},
-        senderFeeRecipient: ${senderFeeRecipient}, 
-        senderFee: ${senderFee}, 
-        refundAddress: ${transaction.refundAddress}, 
-        messageHash: ${encryptedRecipient.substring(0, 20)}...]`);
+      this.logger.log(`[DEBUG] 📝 COMPLETE ORDER CREATION PARAMETERS:`);
+      this.logger.log(`[DEBUG] 1. Contract Parameters:
+        - Token Address: ${transaction.tokenAddress}
+        - Amount (in token units): ${amountInTokenUnits}
+        - Rate: ${rate}
+        - Sender Fee Recipient: ${senderFeeRecipient}
+        - Sender Fee: ${senderFee}
+        - Refund Address: ${transaction.refundAddress}
+        - Message Hash (first 20 chars): ${encryptedRecipient.substring(0, 20)}...
+      `);
       
-      const txResponse = await customSmartContractWrite({
-        walletId: walletConfig.walletId,
-        addressId: transaction.addressId,
-        apiKey: walletConfig.apiKey,
-        abi: gatewayAbi as unknown as object[],
-        address: gatewayAddress,
-        method: "createOrder",
-        parameters: [
-          transaction.tokenAddress,
-          amountInTokenUnits,
-          rate,
-          senderFeeRecipient,
-          senderFee,
-          transaction.refundAddress,
-          encryptedRecipient
-        ],
-      });
+      this.logger.log(`[DEBUG] 2. Transaction Details:
+        - Transaction ID: ${transactionId}
+        - Address ID: ${transaction.addressId}
+        - Chain/Network: ${transaction.chain}
+        - Token Symbol: ${transaction.token}
+        - Token Decimals: ${transaction.tokenDecimals}
+        - Original Amount: ${transaction.amount}
+      `);
 
-      this.logger.log(`[DEBUG] Order creation transaction submitted successfully, txHash: ${txResponse.txHash}`);
+      this.logger.log(`[DEBUG] 3. Wallet Configuration:
+        - Wallet ID: ${walletConfig.walletId}
+        - Wallet Name: ${walletConfig.walletName}
+        - API Key (masked): ${walletConfig.apiKey ? `${walletConfig.apiKey.substring(0, 6)}...${walletConfig.apiKey.slice(-4)}` : 'undefined'}
+      `);
 
-      // Step 6: Update transaction with txHash in metadata
-      this.logger.log(`[DEBUG] Updating transaction metadata with order creation hash: ${txResponse.txHash}`);
-      await this.updateTransactionWithHash(transactionId, txResponse.txHash);
-      this.logger.log(`[DEBUG] Transaction metadata updated with txHash`);
+      this.logger.log(`[DEBUG] 4. Gateway Details:
+        - Gateway Address: ${gatewayAddress}
+        - Network/Chain: ${transactionNetwork}
+      `);
+      
+      try {
+        this.logger.log(`[DEBUG] ⏳ Initiating customSmartContractWrite for order creation`);
+        const txResponse = await customSmartContractWrite({
+          walletId: walletConfig.walletId,
+          addressId: transaction.addressId,
+          apiKey: walletConfig.apiKey,
+          abi: gatewayAbi as unknown as object[],
+          address: gatewayAddress,
+          method: "createOrder",
+          parameters: [
+            transaction.tokenAddress,
+            amountInTokenUnits,
+            rate,
+            senderFeeRecipient,
+            senderFee,
+            transaction.refundAddress,
+            encryptedRecipient
+          ],
+        });
 
-      this.logger.log(`[DEBUG] Offramp order creation completed for transactionId: ${transactionId}, txHash: ${txResponse.txHash}`);
-      return txResponse.txHash;
+        this.logger.log(`[DEBUG] Order creation transaction submitted successfully, txHash: ${txResponse.txHash}`);
+        return txResponse.txHash;
+      } catch (error) {
+        this.logger.error(`[DEBUG] ❌ Order creation failed after token approval. Error: ${error.message}`);
+        this.logger.error(`[DEBUG] 🔍 Last successful token approval txHash: ${approvalTx.txHash}`);
+        this.logger.error(`[DEBUG] Failed order creation parameters:
+          Token: ${transaction.tokenAddress}
+          Amount: ${amountInTokenUnits}
+          Rate: ${rate}
+          Refund Address: ${transaction.refundAddress}
+          AddressId: ${transaction.addressId}
+        `);
+        throw error;
+      }
     } catch (error) {
       this.logger.error(`[DEBUG] Error creating offramp order for transaction ${transactionId}: ${error.message}`, error.stack);
       throw error;
@@ -940,8 +975,23 @@ export class OfframpService {
       );
       
       this.logger.log(`[DEBUG] Current allowance for token ${tokenAddress}: ${currentAllowance}`);
+
+      // Check token balance
+      this.logger.log(`[DEBUG] Checking token balance for address ${ownerAddress}`);
+      const balanceResponse = await customSmartContractRead({
+        walletId: walletConfig.walletId,
+        addressId,
+        apiKey: walletConfig.apiKey,
+        abi: erc20Abi as unknown as object[],
+        address: tokenAddress,
+        method: 'balanceOf',
+        parameters: [ownerAddress],
+      });
+
+      const currentBalance = balanceResponse?.result?.[0] || '0';
+      this.logger.log(`[DEBUG] Current token balance: ${currentBalance}`);
       
-      // Get token information to determine decimal places - with no fallback
+      // Get token information to determine decimal places
       const tokenInfo = getTokenInfoByAddress(tokenAddress);
       if (!tokenInfo) {
         throw new Error(`Token information not found for address ${tokenAddress}`);
@@ -953,7 +1003,6 @@ export class OfframpService {
       // Convert the amount string to a token unit format
       let amountInTokenUnits: string;
       try {
-        // Use viem's parseUnits for reliable token amount conversion
         amountInTokenUnits = parseUnits(amount, decimals).toString();
         this.logger.log(`[DEBUG] Amount converted using parseUnits: ${amount} => ${amountInTokenUnits}`);
       } catch (conversionError) {
@@ -961,21 +1010,30 @@ export class OfframpService {
         throw new Error(`Failed to convert amount: ${conversionError.message}`);
       }
       
+      // Check if balance is sufficient
+      const balanceBigInt = BigInt(currentBalance);
+      const requiredAmountBigInt = BigInt(amountInTokenUnits);
+      
+      if (balanceBigInt < requiredAmountBigInt) {
+        this.logger.error(`[DEBUG] ❌ Insufficient balance. Required: ${amountInTokenUnits}, Available: ${currentBalance}`);
+        throw new Error(`Insufficient token balance. Required: ${amount} ${tokenInfo.symbol}, Available: ${currentBalance}`);
+      }
+      
       // Check if current allowance is already enough
       const currentAllowanceBigInt = BigInt(currentAllowance);
-      const requiredAllowanceBigInt = BigInt(amountInTokenUnits);
       
-      if (currentAllowanceBigInt >= requiredAllowanceBigInt) {
-        this.logger.log(`[DEBUG] Existing allowance is sufficient, skipping approval transaction`);
+      if (currentAllowanceBigInt >= requiredAmountBigInt) {
+        this.logger.log(`[DEBUG] ✅ Existing allowance is sufficient. Required: ${amountInTokenUnits}, Allowance: ${currentAllowance}`);
         return { txHash: 'existing-allowance' };
       }
       
-      // If allowance is insufficient, proceed with approval - use max uint256 value
-      this.logger.log(`[DEBUG] Existing allowance is insufficient, creating approval transaction`);
+      // If allowance is insufficient but balance is okay, proceed with approval
+      this.logger.log(`[DEBUG] 🔄 Existing allowance is insufficient, creating approval transaction`);
+      this.logger.log(`[DEBUG] Required amount: ${amountInTokenUnits}, Current allowance: ${currentAllowance}`);
       
-      // Use maximum uint256 value for unlimited approval (standard practice)
-      const maxApprovalAmount = '115792089237316195423570985008687907853269984665640564039457584007913129639935';
-      this.logger.log(`[DEBUG] Using max uint256 approval amount: ${maxApprovalAmount}`);
+      // Use the exact amount needed for the transaction
+      const approvalAmount = amountInTokenUnits;
+      this.logger.log(`[DEBUG] Using exact amount for approval: ${approvalAmount}`);
       
       const txResponse = await customSmartContractWrite({
         walletId: walletConfig.walletId,
@@ -984,10 +1042,10 @@ export class OfframpService {
         abi: erc20Abi as unknown as object[],
         address: tokenAddress,
         method: 'approve',
-        parameters: [spenderAddress, maxApprovalAmount],
+        parameters: [spenderAddress, approvalAmount],
       });
       
-      this.logger.log(`[DEBUG] Token approval successful, txHash: ${txResponse.txHash}`);
+      this.logger.log(`[DEBUG] ✅ Token approval successful for exact amount ${approvalAmount}, txHash: ${txResponse.txHash}`);
       return txResponse;
     } catch (error) {
       this.logger.error(`[DEBUG] Error approving token spending: ${error.message}`, error.stack);

@@ -84,8 +84,11 @@ export class SimplifiedBusinessResponseDto {
   @ApiProperty({ description: 'Current onboarding step of the business', enum: OnboardingStep })
   onboardingStep: OnboardingStep;
 
-  @ApiProperty({ description: 'Status of the business', enum: ['ACTIVE', 'INACTIVE'] })
+  @ApiProperty({ description: 'Approval status of the business', enum: ['APPROVED', 'NOT_APPROVED'] })
   business_status: string;
+
+  @ApiProperty({ description: 'Status of offramp operations', enum: ['ACTIVE', 'INACTIVE'] })
+  offramp_status: string;
 
   @ApiProperty({ description: 'Bank details of the business', required: false })
   bankDetails?: BankDetailsDto;
