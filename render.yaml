@@ -6,6 +6,6 @@ services:
     startCommand: npm run prod
     envVars:
       - key: NODE_ENV
-        value: production
+        value: devvelopment
     autoDeploy: true
     healthCheckPath: /api/v1/health 
