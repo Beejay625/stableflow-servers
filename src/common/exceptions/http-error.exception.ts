@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus } from "@nestjs/common";
 
 /**
  * Custom HTTP exception with additional error code
@@ -16,9 +16,9 @@ export class HttpErrorException extends HttpException {
    * @param code - Custom error code for client-side handling
    */
   constructor(
-    message: string, 
+    message: string,
     status: HttpStatus | number = HttpStatus.INTERNAL_SERVER_ERROR,
-    code: string = 'UNKNOWN_ERROR'
+    code: string = "UNKNOWN_ERROR",
   ) {
     super(
       {
@@ -27,9 +27,9 @@ export class HttpErrorException extends HttpException {
         code,
         timestamp: new Date().toISOString(),
       },
-      status
+      status,
     );
-    
+
     this.errorCode = code;
   }
 
@@ -39,4 +39,4 @@ export class HttpErrorException extends HttpException {
   getErrorCode(): string {
     return this.errorCode;
   }
-} 
+}

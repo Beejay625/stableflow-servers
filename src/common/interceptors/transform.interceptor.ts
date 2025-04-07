@@ -4,11 +4,11 @@ import {
   ExecutionContext,
   CallHandler,
   Logger,
-} from '@nestjs/common';
-import { Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
-import { Response as ExpressResponse } from 'express';
-import { Readable } from 'stream';
+} from "@nestjs/common";
+import { Observable } from "rxjs";
+import { map } from "rxjs/operators";
+import { Response as ExpressResponse } from "express";
+import { Readable } from "stream";
 
 export interface Response<T> {
   statusCode: number;
@@ -18,10 +18,10 @@ export interface Response<T> {
 
 @Injectable()
 export class TransformInterceptor<T>
-  implements NestInterceptor<T, Response<T>> {
-  
+  implements NestInterceptor<T, Response<T>>
+{
   private readonly logger = new Logger(TransformInterceptor.name);
-  
+
   intercept(
     context: ExecutionContext,
     next: CallHandler,
@@ -33,31 +33,38 @@ export class TransformInterceptor<T>
 
     // Skip transformation for responses that use @Res()
     const handler = context.getHandler();
-    const isCustomResponse = Reflect.getMetadata('custom_response', handler);
+    const isCustomResponse = Reflect.getMetadata("custom_response", handler);
     if (isCustomResponse) {
-      this.logger.log(`Skipping transformation for custom response path: ${path}`);
+      this.logger.log(
+        `Skipping transformation for custom response path: ${path}`,
+      );
       return next.handle();
     }
 
     return next.handle().pipe(
-      map(data => {
+      map((data) => {
         this.logger.log(`Transforming response for path: ${path}`);
-        
+
         // Skip stringification for debugging if data is complex
         if (this.isComplexObject(data)) {
-          this.logger.log('Complex object detected, skipping detailed logging');
+          this.logger.log("Complex object detected, skipping detailed logging");
         } else {
           try {
-            if (process.env.NODE_ENV === 'development') {
+            if (process.env.NODE_ENV === "development") {
               this.logger.log(`Original data: ${JSON.stringify(data)}`);
             }
           } catch (e) {
-            this.logger.warn('Could not stringify original data');
+            this.logger.warn("Could not stringify original data");
           }
         }
-        
+
         // If data already has a specific structure, maintain it
-        if (data && typeof data === 'object' && 'data' in data && 'message' in data) {
+        if (
+          data &&
+          typeof data === "object" &&
+          "data" in data &&
+          "message" in data
+        ) {
           return {
             statusCode,
             ...data,
@@ -67,7 +74,7 @@ export class TransformInterceptor<T>
         // Standard transformation
         return {
           statusCode,
-          message: 'Success',
+          message: "Success",
           data,
         };
       }),
@@ -75,23 +82,23 @@ export class TransformInterceptor<T>
   }
 
   private isComplexObject(obj: any): boolean {
-    if (!obj || typeof obj !== 'object') return false;
-    
+    if (!obj || typeof obj !== "object") return false;
+
     // Check for Express Response
-    if ('status' in obj && 'send' in obj && typeof obj.send === 'function') {
+    if ("status" in obj && "send" in obj && typeof obj.send === "function") {
       return true;
     }
-    
+
     // Check for Buffer
     if (Buffer.isBuffer(obj)) {
       return true;
     }
-    
+
     // Check for Stream
     if (obj instanceof Readable) {
       return true;
     }
-    
+
     return false;
   }
-} 
+}

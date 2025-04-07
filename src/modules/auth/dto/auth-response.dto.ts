@@ -1,38 +1,38 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty } from "@nestjs/swagger";
 
 export class AuthResponseDto {
-  @ApiProperty({ 
-    description: 'JWT access token for authentication',
-    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' 
+  @ApiProperty({
+    description: "JWT access token for authentication",
+    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   })
   accessToken: string;
 
-  @ApiProperty({ 
-    description: 'JWT refresh token for obtaining new access tokens',
-    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
-    required: false 
+  @ApiProperty({
+    description: "JWT refresh token for obtaining new access tokens",
+    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    required: false,
   })
   refreshToken?: string;
 
-  @ApiProperty({ 
-    description: 'Token expiration time in seconds',
+  @ApiProperty({
+    description: "Token expiration time in seconds",
     example: 86400,
-    required: false
+    required: false,
   })
   expiresIn?: number;
 
-  @ApiProperty({ description: 'User ID' })
+  @ApiProperty({ description: "User ID" })
   userId: string;
 
-  @ApiProperty({ description: 'User email address' })
+  @ApiProperty({ description: "User email address" })
   email: string;
 
-  @ApiProperty({ description: 'User role' })
+  @ApiProperty({ description: "User role" })
   role: string;
 
-  @ApiProperty({ description: 'Timestamp of when the token was issued' })
+  @ApiProperty({ description: "Timestamp of when the token was issued" })
   issuedAt: Date;
 
-  @ApiProperty({ description: 'Timestamp of when the token expires' })
+  @ApiProperty({ description: "Timestamp of when the token expires" })
   expiresAt: Date;
-} 
+}

@@ -5,9 +5,9 @@ import {
   HttpException,
   HttpStatus,
   Logger,
-} from '@nestjs/common';
-import { Request, Response } from 'express';
-import { BaseException } from '../exceptions';
+} from "@nestjs/common";
+import { Request, Response } from "express";
+import { BaseException } from "../exceptions";
 
 @Catch(HttpException)
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -21,9 +21,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     // Get the error response
     let errorResponse: any = exception.getResponse();
-    
+
     // Convert string error responses to objects
-    if (typeof errorResponse === 'string') {
+    if (typeof errorResponse === "string") {
       errorResponse = {
         message: errorResponse,
         error: HttpStatus[status],
@@ -55,4 +55,4 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Send the response
     response.status(status).json(errorResponse);
   }
-} 
+}

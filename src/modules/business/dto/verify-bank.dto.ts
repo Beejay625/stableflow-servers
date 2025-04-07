@@ -1,6 +1,6 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsOptional, ValidateIf, IsNotEmpty } from 'class-validator';
-import { Type } from 'class-transformer';
+import { ApiProperty } from "@nestjs/swagger";
+import { IsString, IsOptional, ValidateIf, IsNotEmpty } from "class-validator";
+import { Type } from "class-transformer";
 
 /**
  * DTO for verifying a bank account without linking it to a business
@@ -8,34 +8,36 @@ import { Type } from 'class-transformer';
  */
 export class VerifyBankDto {
   @ApiProperty({
-    description: 'Bank code from valid Nigerian banks list (cannot be used with bankName)',
-    example: '058',
-    required: false
+    description:
+      "Bank code from valid Nigerian banks list (cannot be used with bankName)",
+    example: "058",
+    required: false,
   })
   @IsOptional()
   @IsString()
-  @ValidateIf(o => !o.bankName)
-  @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
+  @ValidateIf((o) => !o.bankName)
+  @IsNotEmpty({ message: "Either bankCode or bankName must be provided" })
   bankCode?: string;
 
   @ApiProperty({
-    description: 'Bank name from valid Nigerian banks list (cannot be used with bankCode)',
-    example: 'Access Bank',
-    required: false
+    description:
+      "Bank name from valid Nigerian banks list (cannot be used with bankCode)",
+    example: "Access Bank",
+    required: false,
   })
   @IsOptional()
   @IsString()
-  @ValidateIf(o => !o.bankCode)
-  @IsNotEmpty({ message: 'Either bankCode or bankName must be provided' })
+  @ValidateIf((o) => !o.bankCode)
+  @IsNotEmpty({ message: "Either bankCode or bankName must be provided" })
   bankName?: string;
 
   @ApiProperty({
-    description: 'Account number to verify',
-    example: '0123456789',
-    required: true
+    description: "Account number to verify",
+    example: "0123456789",
+    required: true,
   })
   @IsString()
-  @IsNotEmpty({ message: 'Account number is required' })
+  @IsNotEmpty({ message: "Account number is required" })
   accountNumber: string;
 
   /**
@@ -47,4 +49,4 @@ export class VerifyBankDto {
     }
     return true;
   }
-} 
+}

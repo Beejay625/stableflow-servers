@@ -1,13 +1,14 @@
-import { Injectable } from '@nestjs/common';
-import { Business, OnboardingStep } from '../entities/business.entity';
-import { SimplifiedBusinessResponseDto, WalletDetailsDto } from '../dto/business-response.dto';
-import { BusinessWalletService } from '../services/business-wallet.service';
+import { Injectable } from "@nestjs/common";
+import { Business, OnboardingStep } from "../entities/business.entity";
+import {
+  SimplifiedBusinessResponseDto,
+  WalletDetailsDto,
+} from "../dto/business-response.dto";
+import { BusinessWalletService } from "../services/business-wallet.service";
 
 @Injectable()
 export class BusinessTransformer {
-  constructor(
-    private readonly businessWalletService: BusinessWalletService,
-  ) {}
+  constructor(private readonly businessWalletService: BusinessWalletService) {}
 
   /**
    * Converts a business entity to a simplified response DTO
@@ -18,13 +19,19 @@ export class BusinessTransformer {
     response.name = business.name;
     response.phoneNumber = business.phoneNumber;
     response.onboardingStep = business.onboardingStep;
-    
+
     // Business status shows if business is approved
-    response.business_status = business.onboardingStep === OnboardingStep.APPROVED ? 'APPROVED' : 'NOT_APPROVED';
-    
+    response.business_status =
+      business.onboardingStep === OnboardingStep.APPROVED
+        ? "APPROVED"
+        : "NOT_APPROVED";
+
     // Offramp status shows if transactions can be processed
-    response.offramp_status = (business.onboardingStep === OnboardingStep.APPROVED && business.isActive) ? 'ACTIVE' : 'INACTIVE';
-    
+    response.offramp_status =
+      business.onboardingStep === OnboardingStep.APPROVED && business.isActive
+        ? "ACTIVE"
+        : "INACTIVE";
+
     response.user_Id = business.ownerId;
     response.createdAt = business.createdAt;
     response.updatedAt = business.updatedAt;
@@ -41,7 +48,7 @@ export class BusinessTransformer {
         accountName: business.bankDetails.accountName,
         accountType: business.bankDetails.accountType,
         createdAt: business.bankDetails.createdAt,
-        updatedAt: business.bankDetails.updatedAt
+        updatedAt: business.bankDetails.updatedAt,
       };
     }
 
@@ -52,4 +59,4 @@ export class BusinessTransformer {
 
     return response;
   }
-} 
+}

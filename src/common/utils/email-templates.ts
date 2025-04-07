@@ -78,4 +78,4 @@ export const passwordResetEmailTemplate = (resetLink: string): string => {
       </div>
     </div>
   `;
-}; 
+};

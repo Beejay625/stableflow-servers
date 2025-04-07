@@ -192,7 +192,7 @@ export class OfframpService {
       // Log additional information about the addressId
       this.logger.log(`[DEBUG] Using transaction addressId: ${transaction.addressId} for token approval`);
 
-      this.logger.log(`[DEBUG] Token approval transaction executed with hash: ${approvalTx.txHash}`);
+      this.logger.log(`[DEBUG] Token approval transaction executed with ID: ${approvalTx.txId || 'existing-allowance'}`);
 
       // Step 2: Wait for a short time to ensure the approval is processed
       this.logger.log(`[DEBUG] Waiting for token approval to be processed (2 seconds)`);
@@ -323,11 +323,17 @@ export class OfframpService {
           ],
         });
 
-        this.logger.log(`[DEBUG] Order creation transaction submitted successfully, txHash: ${txResponse.txHash}`);
-        return txResponse.txHash;
+        // Log the complete response for debugging
+        this.logger.log(`[DEBUG] Raw contract write response: ${JSON.stringify(txResponse)}`);
+        
+        // Extract transaction ID from response
+        const txId = txResponse?.data?.id;
+        
+        this.logger.log(`[DEBUG] Order creation transaction submitted successfully, txId: ${txId}`);
+        return txId || 'pending-tx';
       } catch (error) {
         this.logger.error(`[DEBUG] ❌ Order creation failed after token approval. Error: ${error.message}`);
-        this.logger.error(`[DEBUG] 🔍 Last successful token approval txHash: ${approvalTx.txHash}`);
+        this.logger.error(`[DEBUG] 🔍 Last successful token approval txId: ${approvalTx.txId || 'existing-allowance'}`);
         this.logger.error(`[DEBUG] Failed order creation parameters:
           Token: ${transaction.tokenAddress}
           Amount: ${amountInTokenUnits}
@@ -988,7 +994,8 @@ export class OfframpService {
         parameters: [ownerAddress],
       });
 
-      const currentBalance = balanceResponse?.result?.[0] || '0';
+      // Access data property directly from the response instead of result[0]
+      const currentBalance = balanceResponse?.data || '0';
       this.logger.log(`[DEBUG] Current token balance: ${currentBalance}`);
       
       // Get token information to determine decimal places
@@ -1024,7 +1031,7 @@ export class OfframpService {
       
       if (currentAllowanceBigInt >= requiredAmountBigInt) {
         this.logger.log(`[DEBUG] ✅ Existing allowance is sufficient. Required: ${amountInTokenUnits}, Allowance: ${currentAllowance}`);
-        return { txHash: 'existing-allowance' };
+        return { txId: 'existing-allowance' };
       }
       
       // If allowance is insufficient but balance is okay, proceed with approval
@@ -1045,8 +1052,16 @@ export class OfframpService {
         parameters: [spenderAddress, approvalAmount],
       });
       
-      this.logger.log(`[DEBUG] ✅ Token approval successful for exact amount ${approvalAmount}, txHash: ${txResponse.txHash}`);
-      return txResponse;
+      // Log the complete response for debugging
+      this.logger.log(`[DEBUG] Raw approval response: ${JSON.stringify(txResponse)}`);
+      
+      // Extract transaction ID from response
+      const txId = txResponse?.data?.id;
+      
+      this.logger.log(`[DEBUG] ✅ Token approval successful for exact amount ${approvalAmount}, txId: ${txId}`);
+      
+      // Return a consistent response format
+      return { txId: txId || 'pending-tx' };
     } catch (error) {
       this.logger.error(`[DEBUG] Error approving token spending: ${error.message}`, error.stack);
       
@@ -1099,8 +1114,8 @@ export class OfframpService {
         parameters: [ownerAddress, spenderAddress],
       });
       
-      // Extract allowance value from response
-      const allowance = response?.result?.[0] || '0';
+      // Extract allowance value from response - fix to use data property
+      const allowance = response?.data || '0';
       this.logger.log(`[DEBUG] Current allowance: ${allowance}`);
       return allowance;
     } catch (error) {

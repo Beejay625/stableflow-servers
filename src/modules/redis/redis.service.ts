@@ -1,6 +1,11 @@
-import { Injectable, OnModuleDestroy, OnModuleInit, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import Redis from 'ioredis';
+import {
+  Injectable,
+  OnModuleDestroy,
+  OnModuleInit,
+  Logger,
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import Redis from "ioredis";
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -13,24 +18,27 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     // Initialize Redis connection during module initialization
-    this.logger.log('=== INITIALIZING REDIS CONNECTION ===');
+    this.logger.log("=== INITIALIZING REDIS CONNECTION ===");
     try {
       await this.getClient();
-      this.logger.log('=== REDIS CLIENT INITIALIZED SUCCESSFULLY ===');
+      this.logger.log("=== REDIS CLIENT INITIALIZED SUCCESSFULLY ===");
     } catch (error) {
-      this.logger.error(`=== FAILED TO INITIALIZE REDIS CLIENT: ${error.message} ===`, error.stack);
+      this.logger.error(
+        `=== FAILED TO INITIALIZE REDIS CLIENT: ${error.message} ===`,
+        error.stack,
+      );
     }
   }
 
   getClient(): Redis {
     if (!this.redisClient) {
-      const host = this.configService.get('REDIS_HOST');
-      const port = parseInt(this.configService.get('REDIS_PORT') || '6379');
-      const password = this.configService.get('REDIS_PASSWORD');
-      
+      const host = this.configService.get("REDIS_HOST");
+      const port = parseInt(this.configService.get("REDIS_PORT") || "6379");
+      const password = this.configService.get("REDIS_PASSWORD");
+
       this.logger.log(`=== CREATING REDIS CLIENT FOR ${host}:${port} ===`);
       console.log(`\n\n🔴 CONNECTING TO REDIS AT ${host}:${port} 🔴\n\n`);
-      
+
       // Initialize the Redis client with better configuration for Upstash
       this.redisClient = new Redis({
         host,
@@ -42,46 +50,55 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
         lazyConnect: false, // Connect immediately
         retryStrategy: (times) => {
           if (times > 5) {
-            this.logger.error(`=== REDIS CONNECTION FAILED AFTER ${times} ATTEMPTS, GIVING UP ===`);
-            console.log(`\n\n❌ REDIS CONNECTION FAILED AFTER ${times} ATTEMPTS, GIVING UP ❌\n\n`);
+            this.logger.error(
+              `=== REDIS CONNECTION FAILED AFTER ${times} ATTEMPTS, GIVING UP ===`,
+            );
+            console.log(
+              `\n\n❌ REDIS CONNECTION FAILED AFTER ${times} ATTEMPTS, GIVING UP ❌\n\n`,
+            );
             return null; // Stop retrying
           }
           const delay = Math.min(times * 500, 3000);
-          this.logger.log(`=== RETRYING REDIS CONNECTION IN ${delay}ms (ATTEMPT ${times}) ===`);
+          this.logger.log(
+            `=== RETRYING REDIS CONNECTION IN ${delay}ms (ATTEMPT ${times}) ===`,
+          );
           return delay;
         },
         // Add TLS options for Upstash
         tls: {
-          rejectUnauthorized: false // Important for some Redis providers
-        }
+          rejectUnauthorized: false, // Important for some Redis providers
+        },
       });
-      
+
       // Add connection error handler for debugging
-      this.redisClient.on('error', (err) => {
-        this.logger.error(`=== REDIS CONNECTION ERROR: ${err.message} ===`, err.stack);
+      this.redisClient.on("error", (err) => {
+        this.logger.error(
+          `=== REDIS CONNECTION ERROR: ${err.message} ===`,
+          err.stack,
+        );
         console.log(`\n\n❌ REDIS ERROR: ${err.message} ❌\n\n`);
         this.isConnected = false;
         this.isConnecting = false;
       });
-      
+
       // Add successful connection log
-      this.redisClient.on('connect', () => {
-        this.logger.log('=== SUCCESSFULLY CONNECTED TO REDIS ===');
+      this.redisClient.on("connect", () => {
+        this.logger.log("=== SUCCESSFULLY CONNECTED TO REDIS ===");
         console.log(`\n\n🟢 CONNECTED TO REDIS AT ${host}:${port} 🟢\n\n`);
         this.isConnecting = false;
       });
 
       // Add ready handler
-      this.redisClient.on('ready', () => {
-        this.logger.log('=== REDIS CLIENT IS READY ===');
+      this.redisClient.on("ready", () => {
+        this.logger.log("=== REDIS CLIENT IS READY ===");
         console.log(`\n\n✅ REDIS CLIENT IS READY AND OPERATIONAL ✅\n\n`);
         this.isConnected = true;
         this.isConnecting = false;
       });
 
       // Add disconnect handler
-      this.redisClient.on('end', () => {
-        this.logger.log('=== REDIS CONNECTION CLOSED ===');
+      this.redisClient.on("end", () => {
+        this.logger.log("=== REDIS CONNECTION CLOSED ===");
         console.log(`\n\n🔴 REDIS CONNECTION CLOSED 🔴\n\n`);
         this.isConnected = false;
         this.isConnecting = false;
@@ -98,25 +115,30 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async checkConnection(): Promise<boolean> {
     try {
       if (!this.redisClient) {
-        this.logger.log('=== NO REDIS CLIENT FOUND, CREATING ONE... ===');
+        this.logger.log("=== NO REDIS CLIENT FOUND, CREATING ONE... ===");
         // Get client will create and connect automatically
         this.getClient();
       }
-      
+
       // If we're still not connected, try to ping
       if (!this.isConnected) {
-        this.logger.log('=== CHECKING REDIS CONNECTION WITH PING... ===');
-        console.log('\n\n🔍 CHECKING REDIS CONNECTION WITH PING... 🔍\n\n');
+        this.logger.log("=== CHECKING REDIS CONNECTION WITH PING... ===");
+        console.log("\n\n🔍 CHECKING REDIS CONNECTION WITH PING... 🔍\n\n");
         await this.redisClient.ping();
         this.isConnected = true;
-        this.logger.log('=== REDIS CONNECTION VERIFIED WITH PING ===');
-        console.log('\n\n✅ REDIS CONNECTION VERIFIED WITH PING ✅\n\n');
+        this.logger.log("=== REDIS CONNECTION VERIFIED WITH PING ===");
+        console.log("\n\n✅ REDIS CONNECTION VERIFIED WITH PING ✅\n\n");
       }
-      
+
       return true;
     } catch (error) {
-      this.logger.error(`=== REDIS CONNECTION CHECK FAILED: ${error.message} ===`, error.stack);
-      console.log(`\n\n❌ REDIS CONNECTION CHECK FAILED: ${error.message} ❌\n\n`);
+      this.logger.error(
+        `=== REDIS CONNECTION CHECK FAILED: ${error.message} ===`,
+        error.stack,
+      );
+      console.log(
+        `\n\n❌ REDIS CONNECTION CHECK FAILED: ${error.message} ❌\n\n`,
+      );
       this.isConnected = false;
       throw new Error(`Failed to connect to Redis: ${error.message}`);
     }
@@ -131,7 +153,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     const client = this.getClient();
     return client.get(key);
   }
-  
+
   /**
    * Delete a key from Redis
    * @param key - Key to delete
@@ -149,10 +171,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
    * @param expireInSeconds - Optional expiry time in seconds
    * @returns Promise<'OK'>
    */
-  async setKey(key: string, value: string, expireInSeconds?: number): Promise<'OK'> {
+  async setKey(
+    key: string,
+    value: string,
+    expireInSeconds?: number,
+  ): Promise<"OK"> {
     const client = this.getClient();
     if (expireInSeconds) {
-      return client.set(key, value, 'EX', expireInSeconds);
+      return client.set(key, value, "EX", expireInSeconds);
     }
     return client.set(key, value);
   }
@@ -161,15 +187,18 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     // Close Redis client
     if (this.redisClient) {
       try {
-        this.logger.log('=== CLOSING REDIS CONNECTION... ===');
+        this.logger.log("=== CLOSING REDIS CONNECTION... ===");
         await this.redisClient.quit();
-        this.logger.log('=== REDIS CONNECTION CLOSED SUCCESSFULLY ===');
+        this.logger.log("=== REDIS CONNECTION CLOSED SUCCESSFULLY ===");
       } catch (error) {
-        this.logger.error(`=== ERROR CLOSING REDIS CONNECTION: ${error.message} ===`, error.stack);
+        this.logger.error(
+          `=== ERROR CLOSING REDIS CONNECTION: ${error.message} ===`,
+          error.stack,
+        );
       } finally {
         this.redisClient = null;
         this.isConnected = false;
       }
     }
   }
-} 
+}

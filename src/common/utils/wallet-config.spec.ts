@@ -1,8 +1,8 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { ConfigService } from '@nestjs/config';
-import { WalletConfigService } from './wallet-config';
+import { Test, TestingModule } from "@nestjs/testing";
+import { ConfigService } from "@nestjs/config";
+import { WalletConfigService } from "./wallet-config";
 
-describe('WalletConfigService', () => {
+describe("WalletConfigService", () => {
   let service: WalletConfigService;
   let configService: ConfigService;
 
@@ -11,18 +11,18 @@ describe('WalletConfigService', () => {
     const configServiceMock = {
       get: jest.fn((key) => {
         const config = {
-          'bep20usdt': {
-            apiKey: 'bep20usdt-api-key',
-            walletId: 'bep20usdt-wallet-id',
+          bep20usdt: {
+            apiKey: "bep20usdt-api-key",
+            walletId: "bep20usdt-wallet-id",
           },
-          'usdcbase': {
-            apiKey: 'usdcbase-api-key',
-            walletId: 'usdcbase-wallet-id',
+          usdcbase: {
+            apiKey: "usdcbase-api-key",
+            walletId: "usdcbase-wallet-id",
           },
-          'tronusdt': {
-            apiKey: 'tronusdt-api-key',
-            walletId: 'tronusdt-wallet-id',
-          }
+          tronusdt: {
+            apiKey: "tronusdt-api-key",
+            walletId: "tronusdt-wallet-id",
+          },
         };
         return config[key];
       }),
@@ -39,52 +39,52 @@ describe('WalletConfigService', () => {
     configService = module.get<ConfigService>(ConfigService);
   });
 
-  it('should be defined', () => {
+  it("should be defined", () => {
     expect(service).toBeDefined();
   });
 
-  describe('getWalletConfig', () => {
-    it('should return bep20usdt config for BNB Smart Chain USDT transactions', () => {
+  describe("getWalletConfig", () => {
+    it("should return bep20usdt config for BNB Smart Chain USDT transactions", () => {
       const payload = {
         data: {
-          blockchain: { name: 'BNB smart chain' },
-          asset: { symbol: 'USDT' },
-          wallet: { id: 'test-wallet-id' }
-        }
+          blockchain: { name: "BNB smart chain" },
+          asset: { symbol: "USDT" },
+          wallet: { id: "test-wallet-id" },
+        },
       };
 
       const result = service.getWalletConfig(payload);
 
       expect(result).not.toBeNull();
-      expect(result?.walletName).toBe('bep20usdt');
-      expect(result?.apiKey).toBe('bep20usdt-api-key');
-      expect(result?.walletId).toBe('test-wallet-id'); // Prefer payload wallet ID
+      expect(result?.walletName).toBe("bep20usdt");
+      expect(result?.apiKey).toBe("bep20usdt-api-key");
+      expect(result?.walletId).toBe("test-wallet-id"); // Prefer payload wallet ID
     });
 
-    it('should return usdcbase config for Base USDC transactions', () => {
+    it("should return usdcbase config for Base USDC transactions", () => {
       const payload = {
         data: {
-          blockchain: { name: 'base' },
-          asset: { symbol: 'USDC' },
-          wallet: { id: 'test-wallet-id' }
-        }
+          blockchain: { name: "base" },
+          asset: { symbol: "USDC" },
+          wallet: { id: "test-wallet-id" },
+        },
       };
 
       const result = service.getWalletConfig(payload);
 
       expect(result).not.toBeNull();
-      expect(result?.walletName).toBe('usdcbase');
-      expect(result?.apiKey).toBe('usdcbase-api-key');
-      expect(result?.walletId).toBe('test-wallet-id');
+      expect(result?.walletName).toBe("usdcbase");
+      expect(result?.apiKey).toBe("usdcbase-api-key");
+      expect(result?.walletId).toBe("test-wallet-id");
     });
 
-    it('should return null when no matching wallet is found', () => {
+    it("should return null when no matching wallet is found", () => {
       const payload = {
         data: {
-          blockchain: { name: 'ethereum' },
-          asset: { symbol: 'ETH' },
-          wallet: { id: 'test-wallet-id' }
-        }
+          blockchain: { name: "ethereum" },
+          asset: { symbol: "ETH" },
+          wallet: { id: "test-wallet-id" },
+        },
       };
 
       const result = service.getWalletConfig(payload);
@@ -92,7 +92,7 @@ describe('WalletConfigService', () => {
       expect(result).toBeNull();
     });
 
-    it('should handle missing payload data gracefully', () => {
+    it("should handle missing payload data gracefully", () => {
       const payload = {};
 
       const result = service.getWalletConfig(payload);
@@ -101,34 +101,34 @@ describe('WalletConfigService', () => {
     });
   });
 
-  describe('getBlockchainName', () => {
-    it('should return the full blockchain name from payload', () => {
+  describe("getBlockchainName", () => {
+    it("should return the full blockchain name from payload", () => {
       const payload = {
         data: {
-          blockchain: { name: 'BNB smart chain' },
-        }
+          blockchain: { name: "BNB smart chain" },
+        },
       };
 
       const result = service.getBlockchainName(payload);
 
-      expect(result).toBe('BNB smart chain');
+      expect(result).toBe("BNB smart chain");
     });
 
-    it('should fallback to network if blockchain name is missing', () => {
+    it("should fallback to network if blockchain name is missing", () => {
       const payload = {
         data: {
-          network: 'tron'
-        }
+          network: "tron",
+        },
       };
 
       const result = service.getBlockchainName(payload);
 
-      expect(result).toBe('tron');
+      expect(result).toBe("tron");
     });
 
-    it('should return null if both blockchain name and network are missing', () => {
+    it("should return null if both blockchain name and network are missing", () => {
       const payload = {
-        data: {}
+        data: {},
       };
 
       const result = service.getBlockchainName(payload);
@@ -137,42 +137,42 @@ describe('WalletConfigService', () => {
     });
   });
 
-  describe('getWalletConfigForTransaction', () => {
-    it('should return bep20usdt config for BNB Smart Chain transaction data', () => {
+  describe("getWalletConfigForTransaction", () => {
+    it("should return bep20usdt config for BNB Smart Chain transaction data", () => {
       const transactionData = {
-        blockchainName: 'BNB smart chain',
-        tokenSymbol: 'USDT',
-        walletId: 'test-wallet-id'
+        blockchainName: "BNB smart chain",
+        tokenSymbol: "USDT",
+        walletId: "test-wallet-id",
       };
 
       const result = service.getWalletConfigForTransaction(transactionData);
 
       expect(result).not.toBeNull();
-      expect(result?.walletName).toBe('bep20usdt');
-      expect(result?.apiKey).toBe('bep20usdt-api-key');
-      expect(result?.walletId).toBe('test-wallet-id');
+      expect(result?.walletName).toBe("bep20usdt");
+      expect(result?.apiKey).toBe("bep20usdt-api-key");
+      expect(result?.walletId).toBe("test-wallet-id");
     });
 
-    it('should return usdcbase config for Base transaction data', () => {
+    it("should return usdcbase config for Base transaction data", () => {
       const transactionData = {
-        blockchainName: 'base',
-        tokenSymbol: 'USDC',
-        walletId: 'test-wallet-id'
+        blockchainName: "base",
+        tokenSymbol: "USDC",
+        walletId: "test-wallet-id",
       };
 
       const result = service.getWalletConfigForTransaction(transactionData);
 
       expect(result).not.toBeNull();
-      expect(result?.walletName).toBe('usdcbase');
-      expect(result?.apiKey).toBe('usdcbase-api-key');
-      expect(result?.walletId).toBe('test-wallet-id');
+      expect(result?.walletName).toBe("usdcbase");
+      expect(result?.apiKey).toBe("usdcbase-api-key");
+      expect(result?.walletId).toBe("test-wallet-id");
     });
 
-    it('should return null for unsupported blockchain/token combination', () => {
+    it("should return null for unsupported blockchain/token combination", () => {
       const transactionData = {
-        blockchainName: 'ethereum',
-        tokenSymbol: 'ETH',
-        walletId: 'test-wallet-id'
+        blockchainName: "ethereum",
+        tokenSymbol: "ETH",
+        walletId: "test-wallet-id",
       };
 
       const result = service.getWalletConfigForTransaction(transactionData);
@@ -180,4 +180,4 @@ describe('WalletConfigService', () => {
       expect(result).toBeNull();
     });
   });
-}); 
+});

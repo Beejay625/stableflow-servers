@@ -1,8 +1,8 @@
 export enum WebhookEventType {
-  PENDING = 'payment_order.pending',
-  SETTLED = 'payment_order.settled',
-  EXPIRED = 'payment_order.expired',
-  REFUNDED = 'payment_order.refunded',
+  PENDING = "payment_order.pending",
+  SETTLED = "payment_order.settled",
+  EXPIRED = "payment_order.expired",
+  REFUNDED = "payment_order.refunded",
 }
 
 export interface WebhookPayload {
@@ -21,4 +21,4 @@ export interface WebhookPayload {
     txHash?: string;
     reason?: string;
   };
-} 
+}

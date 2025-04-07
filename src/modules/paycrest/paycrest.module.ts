@@ -1,7 +1,7 @@
-import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
-import { ConfigModule } from '@nestjs/config';
-import { PaycrestService } from './paycrest.service';
+import { Module } from "@nestjs/common";
+import { HttpModule } from "@nestjs/axios";
+import { ConfigModule } from "@nestjs/config";
+import { PaycrestService } from "./paycrest.service";
 
 /**
  * Paycrest API integration module for payment services
@@ -19,4 +19,4 @@ import { PaycrestService } from './paycrest.service';
   providers: [PaycrestService],
   exports: [PaycrestService],
 })
-export class PaycrestModule {} 
+export class PaycrestModule {}

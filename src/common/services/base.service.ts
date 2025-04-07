@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
-import { Repository } from 'typeorm';
-import { PaginatedResponse, PaginationOptions } from '../interfaces/pagination.interface';
+import { Injectable } from "@nestjs/common";
+import { Repository } from "typeorm";
+import {
+  PaginatedResponse,
+  PaginationOptions,
+} from "../interfaces/pagination.interface";
 
 @Injectable()
 export abstract class BaseService<T> {
@@ -14,14 +17,14 @@ export abstract class BaseService<T> {
   async findAllPaginated(
     options: PaginationOptions,
   ): Promise<PaginatedResponse<T>> {
-    const { page = 1, limit = 10, sortBy, sortOrder = 'DESC' } = options;
-    
+    const { page = 1, limit = 10, sortBy, sortOrder = "DESC" } = options;
+
     const skip = (page - 1) * limit;
-    
+
     const [items, totalItems] = await this.repository.findAndCount({
       skip,
       take: limit,
-      order: sortBy ? { [sortBy]: sortOrder } as any : undefined,
+      order: sortBy ? ({ [sortBy]: sortOrder } as any) : undefined,
     });
 
     const totalPages = Math.ceil(totalItems / limit);
@@ -37,4 +40,4 @@ export abstract class BaseService<T> {
       },
     };
   }
-} 
+}

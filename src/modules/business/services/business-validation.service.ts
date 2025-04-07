@@ -1,8 +1,8 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Business, OnboardingStep } from '../entities/business.entity';
-import { BankService } from './bank.service';
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { Business, OnboardingStep } from "../entities/business.entity";
+import { BankService } from "./bank.service";
 
 @Injectable()
 export class BusinessValidationService {
@@ -17,30 +17,41 @@ export class BusinessValidationService {
   /**
    * Validates business details for onboarding
    */
-  validateBusinessDetails(business: Business): { isValid: boolean; reason?: string } {
+  validateBusinessDetails(business: Business): {
+    isValid: boolean;
+    reason?: string;
+  } {
     const errors: string[] = [];
 
     if (!business.name || business.name.trim().length === 0) {
-      errors.push('Business name is required');
+      errors.push("Business name is required");
     }
 
-    if (!business.phoneNumber || !/^\+[1-9]\d{1,14}$/.test(business.phoneNumber)) {
-      errors.push('Valid phone number in international format is required');
+    if (
+      !business.phoneNumber ||
+      !/^\+[1-9]\d{1,14}$/.test(business.phoneNumber)
+    ) {
+      errors.push("Valid phone number in international format is required");
     }
 
     if (!business.category || !business.categoryId) {
-      errors.push('Business category is required');
+      errors.push("Business category is required");
     } else if (!business.category.isActive) {
-      errors.push('Selected category is not active');
+      errors.push("Selected category is not active");
     }
 
     // Check for invalid state: bank details in NOT_STARTED
-    if (business.onboardingStep === OnboardingStep.NOT_STARTED && business.bankDetails) {
-      errors.push('Cannot have bank details in NOT_STARTED state. Complete business setup first');
+    if (
+      business.onboardingStep === OnboardingStep.NOT_STARTED &&
+      business.bankDetails
+    ) {
+      errors.push(
+        "Cannot have bank details in NOT_STARTED state. Complete business setup first",
+      );
     }
 
     if (errors.length > 0) {
-      return { isValid: false, reason: errors.join(', ') };
+      return { isValid: false, reason: errors.join(", ") };
     }
 
     return { isValid: true };
@@ -52,7 +63,7 @@ export class BusinessValidationService {
   async validateAndGetBusiness(id: string, ownerId: string): Promise<Business> {
     const business = await this.businessRepository.findOne({
       where: { id, ownerId },
-      relations: ['category', 'bankDetails'],
+      relations: ["category", "bankDetails"],
     });
 
     if (!business) {
@@ -67,7 +78,7 @@ export class BusinessValidationService {
    */
   async updateOnboardingStep(
     business: Business,
-    queryRunner: any
+    queryRunner: any,
   ): Promise<{ newStep: OnboardingStep; changes: string[]; error?: string }> {
     const changes: string[] = [];
     let newStep = business.onboardingStep;
@@ -79,10 +90,12 @@ export class BusinessValidationService {
         const { isValid, reason } = this.validateBusinessDetails(business);
         if (isValid) {
           newStep = OnboardingStep.BUSINESS_SETUP;
-          changes.push('business_details_completed');
+          changes.push("business_details_completed");
         } else {
           error = `Cannot progress from NOT_STARTED: ${reason}`;
-          this.logger.warn(`Business ${business.id} validation failed: ${reason}`);
+          this.logger.warn(
+            `Business ${business.id} validation failed: ${reason}`,
+          );
         }
         break;
       }
@@ -93,17 +106,21 @@ export class BusinessValidationService {
         if (!businessValid.isValid) {
           error = `Invalid business details: ${businessValid.reason}`;
           newStep = OnboardingStep.NOT_STARTED;
-          changes.push('reverted_to_not_started');
+          changes.push("reverted_to_not_started");
           break;
         }
 
-        const { isValid, reason } = this.bankService.validateBankDetails(business.bankDetails);
+        const { isValid, reason } = this.bankService.validateBankDetails(
+          business.bankDetails,
+        );
         if (isValid) {
           newStep = OnboardingStep.ACCOUNT_SETUP;
-          changes.push('bank_details_completed');
+          changes.push("bank_details_completed");
         } else {
           error = `Cannot progress from BUSINESS_SETUP: ${reason}`;
-          this.logger.warn(`Business ${business.id} bank validation failed: ${reason}`);
+          this.logger.warn(
+            `Business ${business.id} bank validation failed: ${reason}`,
+          );
         }
         break;
       }
@@ -112,17 +129,20 @@ export class BusinessValidationService {
         // No automatic transition - requires admin approval
         // But validate both business and bank details are still valid
         const businessValid = this.validateBusinessDetails(business);
-        const bankValid = this.bankService.validateBankDetails(business.bankDetails);
-        
+        const bankValid = this.bankService.validateBankDetails(
+          business.bankDetails,
+        );
+
         if (!businessValid.isValid || !bankValid.isValid) {
-          error = `Invalid state: ${businessValid.reason || ''} ${bankValid.reason || ''}`.trim();
+          error =
+            `Invalid state: ${businessValid.reason || ""} ${bankValid.reason || ""}`.trim();
           // Determine which state to revert to
           if (!businessValid.isValid) {
             newStep = OnboardingStep.NOT_STARTED;
-            changes.push('reverted_to_not_started');
+            changes.push("reverted_to_not_started");
           } else {
             newStep = OnboardingStep.BUSINESS_SETUP;
-            changes.push('reverted_to_business_setup');
+            changes.push("reverted_to_business_setup");
           }
         }
         break;
@@ -131,20 +151,23 @@ export class BusinessValidationService {
       case OnboardingStep.APPROVED: {
         // Validate everything is still valid
         const businessValid = this.validateBusinessDetails(business);
-        const bankValid = this.bankService.validateBankDetails(business.bankDetails);
-        
+        const bankValid = this.bankService.validateBankDetails(
+          business.bankDetails,
+        );
+
         if (!businessValid.isValid || !bankValid.isValid) {
-          error = `Invalid approved state: ${businessValid.reason || ''} ${bankValid.reason || ''}`.trim();
+          error =
+            `Invalid approved state: ${businessValid.reason || ""} ${bankValid.reason || ""}`.trim();
           // Determine which state to revert to
           if (!businessValid.isValid) {
             newStep = OnboardingStep.NOT_STARTED;
-            changes.push('reverted_to_not_started');
+            changes.push("reverted_to_not_started");
           } else if (!bankValid.isValid) {
             newStep = OnboardingStep.BUSINESS_SETUP;
-            changes.push('reverted_to_business_setup');
+            changes.push("reverted_to_business_setup");
           } else {
             newStep = OnboardingStep.ACCOUNT_SETUP;
-            changes.push('reverted_to_account_setup');
+            changes.push("reverted_to_account_setup");
           }
         }
         break;
@@ -153,4 +176,4 @@ export class BusinessValidationService {
 
     return { newStep, changes, error };
   }
-} 
+}

@@ -1,6 +1,6 @@
-import { HttpStatus } from '@nestjs/common';
-import { AxiosError } from 'axios';
-import { HttpErrorException } from '../exceptions';
+import { HttpStatus } from "@nestjs/common";
+import { AxiosError } from "axios";
+import { HttpErrorException } from "../exceptions";
 
 interface ErrorResponse {
   message?: string;
@@ -17,8 +17,11 @@ interface ErrorResponse {
 export const formatQueryParams = (params: Record<string, any>): string => {
   const validParams = Object.entries(params)
     .filter(([_, value]) => value !== undefined && value !== null)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join('&');
+    .map(
+      ([key, value]) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+    )
+    .join("&");
 
   return validParams;
 };
@@ -33,25 +36,32 @@ export const handleAxiosError = (error: AxiosError<ErrorResponse>): never => {
     // The request was made and the server responded with a status code
     // that falls out of the range of 2xx
     const status = error.response.status;
-    const message = error.response.data?.message || error.response.data?.error || error.message;
-    
+    const message =
+      error.response.data?.message ||
+      error.response.data?.error ||
+      error.message;
+
     // Add details to message to avoid using the 4th parameter
-    const detailedMessage = `${message} - URL: ${error.config?.url || 'unknown'}, Method: ${error.config?.method || 'unknown'}`;
-    throw new HttpErrorException(detailedMessage, status, 'HTTP_REQUEST_FAILED');
+    const detailedMessage = `${message} - URL: ${error.config?.url || "unknown"}, Method: ${error.config?.method || "unknown"}`;
+    throw new HttpErrorException(
+      detailedMessage,
+      status,
+      "HTTP_REQUEST_FAILED",
+    );
   } else if (error.request) {
     // The request was made but no response was received
-    const detailedMessage = `Service Unavailable - URL: ${error.config?.url || 'unknown'}`;
+    const detailedMessage = `Service Unavailable - URL: ${error.config?.url || "unknown"}`;
     throw new HttpErrorException(
       detailedMessage,
       HttpStatus.SERVICE_UNAVAILABLE,
-      'SERVICE_UNAVAILABLE'
+      "SERVICE_UNAVAILABLE",
     );
   } else {
     // Something happened in setting up the request that triggered an Error
     throw new HttpErrorException(
-      'Internal Server Error',
+      "Internal Server Error",
       HttpStatus.INTERNAL_SERVER_ERROR,
-      'REQUEST_SETUP_FAILED'
+      "REQUEST_SETUP_FAILED",
     );
   }
 };
@@ -69,7 +79,7 @@ interface RetryOptions {
  */
 export const retryWithBackoff = async <T>(
   fn: () => Promise<T>,
-  options: RetryOptions
+  options: RetryOptions,
 ): Promise<T> => {
   const { maxAttempts, initialDelay } = options;
   let attempt = 1;
@@ -84,7 +94,7 @@ export const retryWithBackoff = async <T>(
       }
 
       // Wait for the calculated delay
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
 
       // Exponential backoff
       delay *= 2;
@@ -92,5 +102,5 @@ export const retryWithBackoff = async <T>(
     }
   }
 
-  throw new Error('Max retry attempts reached');
-}; 
+  throw new Error("Max retry attempts reached");
+};

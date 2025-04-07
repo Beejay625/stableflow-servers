@@ -7,4 +7,4 @@ export interface NubapiResponse {
     bank_code?: string;
   };
   account_name?: string;
-} 
+}

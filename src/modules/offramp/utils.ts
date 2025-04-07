@@ -8,32 +8,47 @@ import axios from 'axios';
  * @returns The actual network name used in the system
  */
 function mapNetworkFromConfig(configNetwork: string, chain?: string): string {
+  console.log(`[DEBUG] mapNetworkFromConfig called with configNetwork=${configNetwork}, chain=${chain || 'not provided'}`);
+  
   // First check if chain is specified
   if (chain) {
     // Handle Base chain explicitly
     if (chain.toLowerCase() === 'base') {
-      return configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
+      const result = configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
+      console.log(`[DEBUG] Chain is 'base', returning ${result} based on configNetwork=${configNetwork}`);
+      return result;
     }
     
     // Handle BNB Smart Chain explicitly
     if (chain.toLowerCase().includes('bnb') || chain.toLowerCase().includes('binance')) {
-      return configNetwork === 'mainnet' ? 'BNB Smart Chain' : 'BNB Smart Chain Testnet';
+      const result = configNetwork === 'mainnet' ? 'BNB Smart Chain' : 'BNB Smart Chain Testnet';
+      console.log(`[DEBUG] Chain contains 'bnb' or 'binance', returning ${result} based on configNetwork=${configNetwork}`);
+      return result;
     }
   }
 
   // Default mapping based on config only (when chain is not provided)
+  let result;
   switch (configNetwork) {
     case 'mainnet':
-      return 'BNB Smart Chain'; // Default to BNB Smart Chain if no chain specified
+      result = 'BNB Smart Chain'; // Default to BNB Smart Chain if no chain specified
+      break;
     case 'testnet':
-      return 'BNB Smart Chain Testnet';
+      result = 'BNB Smart Chain Testnet';
+      break;
     case 'base':
-      return 'Base';
+      result = 'Base';
+      break;
     case 'base-testnet':
-      return 'Base Sepolia';
+      result = 'Base Sepolia';
+      break;
     default:
+      console.log(`[DEBUG] Unsupported network configuration: ${configNetwork}`);
       throw new Error(`Unsupported network configuration: ${configNetwork}`);
   }
+  
+  console.log(`[DEBUG] No specific chain match, falling back to config mapping: ${configNetwork} -> ${result}`);
+  return result;
 }
 
 /**
@@ -56,7 +71,7 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         name: "USD Coin Testnet",
         symbol: "USDC",
         decimals: 6,
-        address: "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9",
+        address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       },
       {
         name: "Dai",
@@ -115,34 +130,25 @@ function getGatewayAddressForNetwork(network: string): string {
  * @throws Error if network is not supported or token is not found
  */
 function getTokenAddress(network: string, symbol: string): string {
-  // Specific handling for known token/network combinations based on requirements
-  if (symbol === 'USDC') {
-    if (network === 'Base') {
-      return "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"; // Base Mainnet USDC
-    } else if (network === 'Base Sepolia') {
-      return "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9"; // Base Sepolia USDC (testnet)
-    }
-  }
+  console.log(`[DEBUG] Looking for token ${symbol} on network ${network}`);
   
-  if (symbol === 'USDT') {
-    if (network === 'BNB Smart Chain') {
-      return "0x55d398326f99059fF775485246999027B3197955"; // BNB Mainnet USDT
-    } else if (network === 'BNB Smart Chain Testnet') {
-      return "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd"; // BNB Testnet USDT
-    }
-  }
-
-  // Fallback to tokens list if specific handling doesn't apply
+  // Get tokens for the specified network
   const tokens = fetchSupportedTokens(network);
   if (!tokens) {
+    console.log(`[DEBUG] Network not supported: ${network}`);
     throw new Error(`Unsupported network: ${network}`);
   }
 
-  const token = tokens.find(t => t.symbol === symbol);
+  console.log(`[DEBUG] Available tokens on ${network}: ${tokens.map(t => t.symbol).join(', ')}`);
+
+  // Find the token by symbol (case insensitive)
+  const token = tokens.find(t => t.symbol.toUpperCase() === symbol.toUpperCase());
   if (!token) {
+    console.log(`[DEBUG] Token ${symbol} not found on network ${network}`);
     throw new Error(`Token ${symbol} not found on network ${network}`);
   }
 
+  console.log(`[DEBUG] Found token address for ${symbol}: ${token.address} on network ${network}`);
   return token.address;
 }
 

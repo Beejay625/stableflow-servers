@@ -15,5 +15,5 @@ export interface PaginationOptions {
   page?: number;
   limit?: number;
   sortBy?: string;
-  sortOrder?: 'ASC' | 'DESC';
-} 
+  sortOrder?: "ASC" | "DESC";
+}

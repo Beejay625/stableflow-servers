@@ -46,4 +46,4 @@ export interface WalletAddressRequest {
   };
   name: string;
   showPrivateKey: boolean;
-} 
+}

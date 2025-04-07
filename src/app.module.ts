@@ -1,15 +1,20 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TypeOrmModule } from '@nestjs/typeorm';
-import { envConfig, databaseConfig } from './config';
-import { AuthModule, RedisModule, QueueModule, PaycrestModule } from './modules';
-import { BusinessModule } from './modules/business/business.module';
-import { WalletModule } from './modules/wallet/wallet.module';
-import { OfframpModule } from './modules/offramp/offramp.module';
-import { APP_GUARD } from '@nestjs/core';
-import { JwtAuthGuard } from './common/guards';
-import { JwtModule } from '@nestjs/jwt';
-import { HealthController } from './health/health.controller';
+import { Module } from "@nestjs/common";
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { TypeOrmModule } from "@nestjs/typeorm";
+import { envConfig, databaseConfig } from "./config";
+import {
+  AuthModule,
+  RedisModule,
+  QueueModule,
+  PaycrestModule,
+} from "./modules";
+import { BusinessModule } from "./modules/business/business.module";
+import { WalletModule } from "./modules/wallet/wallet.module";
+import { OfframpModule } from "./modules/offramp/offramp.module";
+import { APP_GUARD } from "@nestjs/core";
+import { JwtAuthGuard } from "./common/guards";
+import { JwtModule } from "@nestjs/jwt";
+import { HealthController } from "./health/health.controller";
 
 @Module({
   imports: [
@@ -32,17 +37,15 @@ import { HealthController } from './health/health.controller';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { 
-          expiresIn: configService.get<string>('JWT_EXPIRY', '24h')
+        secret: configService.get<string>("JWT_SECRET"),
+        signOptions: {
+          expiresIn: configService.get<string>("JWT_EXPIRY", "24h"),
         },
       }),
       inject: [ConfigService],
     }),
   ],
-  controllers: [
-    HealthController
-  ],
+  controllers: [HealthController],
   providers: [
     {
       provide: APP_GUARD,
@@ -50,4 +53,4 @@ import { HealthController } from './health/health.controller';
     },
   ],
 })
-export class AppModule {} 
+export class AppModule {}

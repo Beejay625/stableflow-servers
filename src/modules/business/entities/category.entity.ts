@@ -1,19 +1,19 @@
-import { 
-  Entity, 
-  Column, 
-  PrimaryGeneratedColumn, 
-  CreateDateColumn, 
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
   UpdateDateColumn,
-  OneToMany
-} from 'typeorm';
-import { Business } from './business.entity';
+  OneToMany,
+} from "typeorm";
+import { Business } from "./business.entity";
 
 /**
  * Entity for storing business categories
  */
-@Entity('categories')
+@Entity("categories")
 export class Category {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @Column({ length: 50, unique: true })
@@ -24,14 +24,14 @@ export class Category {
 
   @Column({ default: false })
   isCustom: boolean;
-  
+
   @Column({ default: true })
   isActive: boolean;
 
   @Column({ nullable: true })
   ownerId: string;
 
-  @OneToMany(type => Business, business => business.category)
+  @OneToMany((type) => Business, (business) => business.category)
   businesses: Business[];
 
   @CreateDateColumn()

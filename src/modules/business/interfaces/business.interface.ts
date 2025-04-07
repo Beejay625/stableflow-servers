@@ -1,5 +1,5 @@
-import { AccountType, OnboardingStep } from '../entities/business.entity';
-import { Currency, Institution } from '../../paycrest/interfaces';
+import { AccountType, OnboardingStep } from "../entities/business.entity";
+import { Currency, Institution } from "../../paycrest/interfaces";
 
 /**
  * Interface representing a business entity with full details
@@ -106,13 +106,13 @@ export interface BankValidationResponse {
      * Bank name
      */
     name: string;
-    
+
     /**
      * Bank code
      */
     code: string;
   };
-  
+
   /**
    * The verified account details
    */
@@ -121,7 +121,7 @@ export interface BankValidationResponse {
      * Account number
      */
     number: string;
-    
+
     /**
      * Account holder's name
      */

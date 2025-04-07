@@ -1,24 +1,24 @@
-import { 
-  Entity, 
-  Column, 
-  PrimaryGeneratedColumn, 
-  CreateDateColumn, 
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
   UpdateDateColumn,
   OneToOne,
-  JoinColumn
-} from 'typeorm';
-import { Business } from './business.entity';
+  JoinColumn,
+} from "typeorm";
+import { Business } from "./business.entity";
 
 export enum AccountType {
-  POS = 'pos',
-  CASH = 'cash',
-  SAVINGS = 'savings',
-  CURRENT = 'current',
+  POS = "pos",
+  CASH = "cash",
+  SAVINGS = "savings",
+  CURRENT = "current",
 }
 
-@Entity('bank_details')
+@Entity("bank_details")
 export class BankDetails {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn("uuid")
   id: string;
 
   @Column({ nullable: true })
@@ -34,20 +34,20 @@ export class BankDetails {
   accountName: string;
 
   @Column({
-    type: 'enum',
+    type: "enum",
     enum: AccountType,
-    nullable: true
+    nullable: true,
   })
   accountType: AccountType;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: "uuid" })
   businessId: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: "timestamp", nullable: true })
   lastVerifiedAt: Date;
 
-  @OneToOne(() => Business, business => business.bankDetails)
-  @JoinColumn({ name: 'businessId' })
+  @OneToOne(() => Business, (business) => business.bankDetails)
+  @JoinColumn({ name: "businessId" })
   business: Business;
 
   @CreateDateColumn()
@@ -55,4 +55,4 @@ export class BankDetails {
 
   @UpdateDateColumn()
   updatedAt: Date;
-} 
+}

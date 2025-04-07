@@ -6,17 +6,17 @@ export interface PaycrestConfig {
    * Base URL for the Paycrest API
    */
   baseUrl: string;
-  
+
   /**
    * API key for authenticating with the Paycrest API
    */
   apiKey: string;
-  
+
   /**
    * Enable response caching (optional)
    */
   enableCaching?: boolean;
-  
+
   /**
    * Cache TTL in seconds (optional, default: 300 seconds)
    */
@@ -28,7 +28,7 @@ export interface PaycrestConfig {
  */
 export interface PaycrestResponse<T> {
   message: string;
-  status: 'success' | 'error';
+  status: "success" | "error";
   data: T;
 }
 
@@ -38,7 +38,7 @@ export interface PaycrestResponse<T> {
 export interface Institution {
   name: string;
   code: string;
-  type: 'bank' | 'mobile_money';
+  type: "bank" | "mobile_money";
 }
 
 /**
@@ -138,4 +138,4 @@ export interface CacheEntry<T> {
   data: T;
   timestamp: number;
   ttl?: number;
-} 
+}

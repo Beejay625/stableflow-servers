@@ -70,4 +70,4 @@ export interface Transaction {
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, any>;
-} 
+}

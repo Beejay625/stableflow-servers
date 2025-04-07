@@ -1,7 +1,7 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { BaseService } from '../base.service';
-import { PaginationDto } from '../../dto/pagination.dto';
-import { Repository } from 'typeorm';
+import { Test, TestingModule } from "@nestjs/testing";
+import { BaseService } from "../base.service";
+import { PaginationDto } from "../../dto/pagination.dto";
+import { Repository } from "typeorm";
 
 interface TestEntity {
   id: number;
@@ -13,7 +13,7 @@ const createMockQueryBuilder = (data: TestEntity[], total: number) => {
   return {
     skip: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
-    getManyAndCount: jest.fn().mockResolvedValue([data, total])
+    getManyAndCount: jest.fn().mockResolvedValue([data, total]),
   };
 };
 
@@ -25,14 +25,17 @@ class TestService extends BaseService<TestEntity> {
   async findAll(paginationDto: PaginationDto = {}) {
     // Create a mock query builder for testing
     const queryBuilder = createMockQueryBuilder(
-      [{ id: 1, name: 'Test 1' }, { id: 2, name: 'Test 2' }],
-      10
+      [
+        { id: 1, name: "Test 1" },
+        { id: 2, name: "Test 2" },
+      ],
+      10,
     );
-    
+
     // Use findAllPaginated instead of paginate
     const { page = 1, limit = 10 } = paginationDto;
     const [items, totalItems] = await queryBuilder.getManyAndCount();
-    
+
     return {
       items,
       meta: {
@@ -50,7 +53,7 @@ class TestService extends BaseService<TestEntity> {
   }
 }
 
-describe('BaseService', () => {
+describe("BaseService", () => {
   let service: TestService;
   let repository: Repository<TestEntity>;
 
@@ -64,11 +67,11 @@ describe('BaseService', () => {
     service = new TestService(repository);
   });
 
-  describe('paginate', () => {
-    it('should return paginated results', async () => {
+  describe("paginate", () => {
+    it("should return paginated results", async () => {
       const mockData: TestEntity[] = [
-        { id: 1, name: 'Test 1' },
-        { id: 2, name: 'Test 2' },
+        { id: 1, name: "Test 1" },
+        { id: 2, name: "Test 2" },
       ];
       const totalItems = 10;
       const paginationDto: PaginationDto = {
@@ -88,7 +91,7 @@ describe('BaseService', () => {
       });
     });
 
-    it('should use default pagination values', async () => {
+    it("should use default pagination values", async () => {
       const result = await service.findAll({});
 
       expect(result.meta.currentPage).toBe(1);
@@ -96,9 +99,9 @@ describe('BaseService', () => {
     });
   });
 
-  describe('findOne', () => {
-    it('should return entity by id', async () => {
-      const mockEntity: TestEntity = { id: 1, name: 'Test 1' };
+  describe("findOne", () => {
+    it("should return entity by id", async () => {
+      const mockEntity: TestEntity = { id: 1, name: "Test 1" };
 
       (repository.findOne as jest.Mock).mockResolvedValue(mockEntity);
 
@@ -108,7 +111,7 @@ describe('BaseService', () => {
       expect(result).toEqual(mockEntity);
     });
 
-    it('should return null when entity not found', async () => {
+    it("should return null when entity not found", async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(null);
 
       const result = await service.findOne(999);
@@ -117,4 +120,4 @@ describe('BaseService', () => {
       expect(result).toBeNull();
     });
   });
-}); 
+});

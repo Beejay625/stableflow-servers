@@ -1,29 +1,25 @@
-export { MailService } from './email';
-export { 
+export { MailService } from "./email";
+export {
   otpEmailTemplate,
   welcomeEmailTemplate,
-  passwordResetEmailTemplate
-} from './email-templates';
+  passwordResetEmailTemplate,
+} from "./email-templates";
 
 // Api utilities
-export { 
+export {
   handleAxiosError as apiHandleAxiosError,
-  retryWithBackoff as apiRetryWithBackoff 
-} from './api-utils';
+  retryWithBackoff as apiRetryWithBackoff,
+} from "./api-utils";
 
 // HTTP utilities
-export { 
+export {
   formatQueryParams,
   handleAxiosError as httpHandleAxiosError,
-  retryWithBackoff as httpRetryWithBackoff 
-} from './http.util';
+  retryWithBackoff as httpRetryWithBackoff,
+} from "./http.util";
 
 // String utilities
-export {
-  normalizeEmail,
-  isValidEmail,
-  truncateString
-} from './string.util';
+export { normalizeEmail, isValidEmail, truncateString } from "./string.util";
 
 // Wallet configuration utility
-export { WalletConfigService, WalletConfigData } from './wallet-config'; 
+export { WalletConfigService, WalletConfigData } from "./wallet-config";

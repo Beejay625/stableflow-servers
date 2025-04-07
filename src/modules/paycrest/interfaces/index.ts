@@ -1,11 +1,11 @@
-export * from './paycrest.interface';
+export * from "./paycrest.interface";
 
 /**
  * Common response format from Paycrest API
  */
 export interface PaycrestResponse<T> {
   message: string;
-  status: 'success' | 'error';
+  status: "success" | "error";
   data: T;
 }
 
@@ -23,7 +23,7 @@ export interface VerifyAccountRequest {
 export interface Institution {
   name: string;
   code: string;
-  type: 'bank' | 'telco' | 'wallet';
+  type: "bank" | "telco" | "wallet";
   supportedCurrencies?: string[];
 }
 

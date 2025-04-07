@@ -1,6 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { createTransport, Transporter } from 'nodemailer';
+import { Injectable, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { createTransport, Transporter } from "nodemailer";
 
 @Injectable()
 export class MailService {
@@ -9,11 +9,11 @@ export class MailService {
 
   constructor(private readonly configService: ConfigService) {
     this.transporter = createTransport({
-      host: this.configService.get<string>('email.host'),
+      host: this.configService.get<string>("email.host"),
       port: 587,
       auth: {
-        user: this.configService.get<string>('email.username'),
-        pass: this.configService.get<string>('email.password'),
+        user: this.configService.get<string>("email.username"),
+        pass: this.configService.get<string>("email.password"),
       },
       secure: false,
     });
@@ -36,7 +36,7 @@ export class MailService {
       this.logger.log(`Sending email to ${sendee}...`);
 
       const mailOptions = {
-        from: `${senderName || 'StableFlow'} <${this.configService.get<string>('email.email')}>`,
+        from: `${senderName || "StableFlow"} <${this.configService.get<string>("email.email")}>`,
         to: sendee,
         subject: title,
         text: message.text,
@@ -57,7 +57,7 @@ export class MailService {
       });
     } catch (exp) {
       this.logger.error(`Unexpected error in sendMail: ${exp}`);
-      throw new Error('Unexpected error while sending email.');
+      throw new Error("Unexpected error while sending email.");
     }
   }
 
@@ -73,7 +73,7 @@ export class MailService {
       await this.sendMail(to, subject, { html });
       return true;
     } catch (error) {
-      this.logger.error('Failed to send email:', error);
+      this.logger.error("Failed to send email:", error);
       return false;
     }
   }
@@ -85,13 +85,13 @@ export class MailService {
    * @returns Promise<boolean> - Whether the email was sent successfully
    */
   async sendOtpEmail(to: string, otp: string): Promise<boolean> {
-    const subject = 'Your Verification Code';
+    const subject = "Your Verification Code";
     const html = `
       <h1>Authentication Code</h1>
       <p>Your verification code is: <strong>${otp}</strong></p>
       <p>This code will expire in 5 minutes.</p>
     `;
-    
+
     return this.sendEmail(to, subject, html);
   }
-} 
+}

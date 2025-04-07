@@ -4,7 +4,7 @@
 export class QueueError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'QueueError';
+    this.name = "QueueError";
     Object.setPrototypeOf(this, QueueError.prototype);
   }
-} 
+}
