@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
-import { WalletService } from '../modules/wallet/wallet.service';
+import { WalletService } from '../modules/wallet/services/wallet.service';
 import { BusinessService } from '../modules/business/services/business.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Business } from '../modules/business/entities/business.entity';

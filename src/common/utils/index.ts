@@ -18,5 +18,12 @@ export {
   retryWithBackoff as httpRetryWithBackoff 
 } from './http.util';
 
+// String utilities
+export {
+  normalizeEmail,
+  isValidEmail,
+  truncateString
+} from './string.util';
+
 // Wallet configuration utility
 export { WalletConfigService, WalletConfigData } from './wallet-config'; 

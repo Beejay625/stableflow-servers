@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Business } from '../entities/business.entity';
-import { WalletService } from '../../wallet/wallet.service';
+import { WalletService } from '../../wallet/services/wallet.service';
 import { WalletDetailsDto } from '../dto/business-response.dto';
 
 @Injectable()

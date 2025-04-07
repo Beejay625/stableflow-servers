@@ -3,10 +3,10 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Business, OnboardingStep } from '../business/entities/business.entity';
-import { User } from '../auth/entities/auth.entity';
+import { Business, OnboardingStep } from '../../business/entities/business.entity';
+import { User } from '../../auth/entities/auth.entity';
 import { firstValueFrom } from 'rxjs';
-import { BlockRadarAddressResponse, WalletAddressRequest } from './interfaces/wallet.interface';
+import { BlockRadarAddressResponse, WalletAddressRequest } from '../interfaces/wallet.interface';
 
 @Injectable()
 export class WalletService {

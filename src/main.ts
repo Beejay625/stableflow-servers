@@ -37,9 +37,6 @@ async function bootstrap() {
   // Check if clustering is enabled via env var
   const enableClustering = process.env.ENABLE_CLUSTERING === 'true';
   const logger = new Logger('NestApplication');
-
-  // Check for worker-only mode
-  const workerOnly = process.env.WORKER_ONLY === 'true';
   
   if (enableClustering && (cluster as any).isMaster) {
     const numCPUs = os.cpus().length;
@@ -91,136 +88,83 @@ async function bootstrap() {
       await redisService.checkConnection();
       logger.log('Redis connection verified ✅');
       
-      // If we're in worker-only mode, don't start the HTTP server
-      if (workerOnly) {
-        // Just initialize the application for queue processors to work
-        await app.init();
-        logger.log('🔥 QUEUE WORKER PROCESS STARTED 🔥');
-        logger.log('Listening for transaction queue jobs...');
-      } else {
-        // Set the global prefix before Swagger setup so it's included in the documentation
-        app.setGlobalPrefix('/api/v1');
+      // Set the global prefix before Swagger setup so it's included in the documentation
+      app.setGlobalPrefix('/api/v1');
 
-        // Configure CORS with explicit options
-        app.enableCors({
-          origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'], // Add frontend URLs
-          methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-          credentials: true,
-          allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-          exposedHeaders: ['X-Total-Count'],
-          maxAge: 3600, // 1 hour
-        });
+      // Configure CORS with explicit options
+      app.enableCors({
+        origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000', 'http://127.0.0.1:3001'], // Add frontend URLs
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        credentials: true,
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+        exposedHeaders: ['X-Total-Count'],
+        maxAge: 3600, // 1 hour
+      });
+      
+      app.useGlobalPipes(new ValidationPipe());
+      app.useGlobalInterceptors(new TransformInterceptor());
+      app.useGlobalFilters(new HttpExceptionFilter());
+
+      // Swagger configuration - only in primary process or when not clustering
+      if (!((cluster as any).isWorker) || !enableClustering) {
+        const config = new DocumentBuilder()
+          .setTitle('StableFlow API')
+          .setDescription('API documentation for the Event Management system')
+          .setVersion('1.0')
+          .addBearerAuth(
+            {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'JWT', // Optional, for better documentation
+            },
+            'access-token' // Name of the security scheme
+          )
+          .build();
+        const document = SwaggerModule.createDocument(app, config);
+
+        // Set up Swagger without token persistence
+        SwaggerModule.setup('api/v1/docs', app, document);
+      }
+
+      // Get preferred port from config
+      const configuredPort = parseInt(configService.get<string>('PORT') || '3000', 10);
+      
+      if (isNaN(configuredPort) || configuredPort <= 0 || configuredPort > 65535) {
+        throw new Error(`Invalid PORT value: ${configuredPort}`);
+      }
+      
+      // Try to find an available port, starting with the configured port
+      let actualPort: number;
+      
+      try {
+        // Check if the configured port is available
+        const inUse = await isPortInUse(configuredPort);
         
-        app.useGlobalPipes(new ValidationPipe());
-        app.useGlobalInterceptors(new TransformInterceptor());
-        app.useGlobalFilters(new HttpExceptionFilter());
-
-        // Swagger configuration - only in primary process or when not clustering
+        if (!inUse) {
+          // Preferred port is available
+          actualPort = configuredPort;
+        } else {
+          // Try to find another available port
+          logger.warn(`Port ${configuredPort} is already in use, searching for an available port...`);
+          actualPort = await findAvailablePort(configuredPort + 1);
+          logger.log(`Found available port: ${actualPort}`);
+        }
+        
+        // Start the application on the determined port
+        await app.listen(actualPort);
+        logger.log(`API server running on port ${actualPort}`);
+        logger.log(`Webhook endpoint: ${await app.getUrl()}/api/v1/wallet/webhook/blockradar`);
+        
+        // Also process queue jobs in the same process
+        logger.log('🔄 API server is also processing queue jobs');
+        
+        logger.log(`Application is running on: ${await app.getUrl()}`);
         if (!((cluster as any).isWorker) || !enableClustering) {
-          const config = new DocumentBuilder()
-            .setTitle('StableFlow API')
-            .setDescription('API documentation for the Event Management system')
-            .setVersion('1.0')
-            .addBearerAuth(
-              {
-                type: 'http',
-                scheme: 'bearer',
-                bearerFormat: 'JWT', // Optional, for better documentation
-              },
-              'access-token', // Name of the security scheme
-            )
-            .build();
-          const document = SwaggerModule.createDocument(app, config);
-
-          // Custom initialization to persist auth token
-          const customOptions = {
-            customSiteTitle: 'StableFlow API Documentation',
-            customJs: [
-              `
-                window.onload = function() {
-                  // Restore token if it exists in localStorage
-                  const token = localStorage.getItem('swagger_token');
-                  if (token) {
-                    const authInput = document.querySelector('.auth-wrapper input[type="text"]');
-                    const authorizeBtn = document.querySelector('.auth-wrapper .authorize');
-                    if (authInput && authorizeBtn) {
-                      authInput.value = token;
-                      authorizeBtn.click();
-                    }
-                  }
-
-                  // Watch for token changes
-                  const targetNode = document.querySelector('.auth-wrapper');
-                  if (targetNode) {
-                    const observer = new MutationObserver(function(mutations) {
-                      mutations.forEach(function(mutation) {
-                        if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
-                          const authInput = document.querySelector('.auth-wrapper input[type="text"]');
-                          if (authInput && authInput.value) {
-                            localStorage.setItem('swagger_token', authInput.value);
-                          } else {
-                            localStorage.removeItem('swagger_token');
-                          }
-                        }
-                      });
-                    });
-
-                    observer.observe(targetNode, {
-                      attributes: true,
-                      subtree: true
-                    });
-                  }
-                }
-              `
-            ],
-            swaggerOptions: {
-              persistAuthorization: true
-            }
-          };
-
-          SwaggerModule.setup('api/v1/docs', app, document, customOptions);
+          logger.log(`Swagger documentation available at: ${await app.getUrl()}/api/v1/docs`);
         }
-
-        // Get preferred port from config
-        const configuredPort = parseInt(configService.get<string>('PORT') || '3000', 10);
-        
-        if (isNaN(configuredPort) || configuredPort <= 0 || configuredPort > 65535) {
-          throw new Error(`Invalid PORT value: ${configuredPort}`);
-        }
-        
-        // Try to find an available port, starting with the configured port
-        let actualPort: number;
-        
-        try {
-          // Check if the configured port is available
-          const inUse = await isPortInUse(configuredPort);
-          
-          if (!inUse) {
-            // Preferred port is available
-            actualPort = configuredPort;
-          } else {
-            // Try to find another available port
-            logger.warn(`Port ${configuredPort} is already in use, searching for an available port...`);
-            actualPort = await findAvailablePort(configuredPort + 1);
-            logger.log(`Found available port: ${actualPort}`);
-          }
-          
-          // Start the application on the determined port
-          await app.listen(actualPort);
-          logger.log(`API server running on port ${actualPort}`);
-          logger.log(`Webhook endpoint: ${await app.getUrl()}/api/v1/wallet/webhook/blockradar`);
-          
-          // Also process queue jobs in the same process (hybrid mode)
-          logger.log('🔄 API server is also processing queue jobs');
-          
-          logger.log(`Application is running on: ${await app.getUrl()}`);
-          if (!((cluster as any).isWorker) || !enableClustering) {
-            logger.log(`Swagger documentation available at: ${await app.getUrl()}/api/v1/docs`);
-          }
-        } catch (error) {
-          logger.error(`Failed to start the application: ${error.message}`);
-          throw error;
-        }
+      } catch (error) {
+        logger.error(`Failed to start the application: ${error.message}`);
+        throw error;
       }
     } catch (error) {
       logger.error(`Failed to start the application: ${error.message}`);

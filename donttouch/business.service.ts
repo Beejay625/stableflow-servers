@@ -1,24 +1,25 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger, Inject, forwardRef, RequestTimeoutException, InternalServerErrorException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Not, Brackets } from 'typeorm';
-import { Business, OnboardingStep } from '../entities/business.entity';
-import { Category } from '../entities/category.entity';
-import { BusinessDto } from '../dto/update-business.dto';
-import { LinkBankDto } from '../dto/link-bank.dto';
-import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse, NigerianBank, NigerianBankResponse, BankValidationResponse } from '../interfaces/business.interface';
-import { NubapiResponse } from '../interfaces';
-import { SimplifiedBusinessResponseDto, BusinessResponseDto, WalletDetailsDto } from '../dto/business-response.dto';
-import { PaycrestService } from '../../paycrest/paycrest.service';
-import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../../paycrest/interfaces';
+import { Business, OnboardingStep } from './entities/business.entity';
+// Import the Category entity class but use it only for type checking
+import { Category } from './entities/category.entity';
+import { BusinessDto } from './dto/update-business.dto';
+import { LinkBankDto } from './dto/link-bank.dto';
+import { BusinessDetail, BusinessListResponse, CategoryListResponse, BankAccountDetail, ExchangeRateResponse, NigerianBank, NigerianBankResponse, BankValidationResponse } from './interfaces/business.interface';
+import { NubapiResponse } from './interfaces';
+import { SimplifiedBusinessResponseDto, BusinessResponseDto, WalletDetailsDto } from './dto/business-response.dto';
+import { PaycrestService } from '../paycrest/paycrest.service';
+import { Currency, Institution, PaycrestResponse, VerifyAccountRequest } from '../paycrest/interfaces';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-import { NUBAPI_TOKEN } from '../../../common/constants/env.constants';
-import { VerifyBankDto } from '../dto/verify-bank.dto';
-import { WalletService } from '../../wallet/services/wallet.service';
-import { BankDetails, AccountType } from '../entities/bank-details.entity';
+import { NUBAPI_TOKEN } from '../../common/constants/env.constants';
+import { VerifyBankDto } from './dto/verify-bank.dto';
+import { WalletService } from '../wallet/services/wallet.service';
+import { BankDetails, AccountType } from './entities/bank-details.entity';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
-import { retryWithBackoff } from '../../../common/utils/api-utils';
+import { retryWithBackoff } from '../../common/utils/api-utils';
 
 // Define the UpdateBusinessOptions type
 type UpdateBusinessOptions = {
@@ -338,7 +339,7 @@ export class BusinessService {
             where: { id, ownerId },
             relations: ['category', 'bankDetails'],
             lock: { mode: 'pessimistic_write' },
-          }) as Business;
+          });
 
           // Generate wallet if needed using centralized method
           const { walletDetails } = await this.generateWalletWithRetries(lockedBusiness, queryRunner);
@@ -347,7 +348,7 @@ export class BusinessService {
             // Refresh business object with new wallet details
             lockedBusiness.walletAddress = walletDetails.address;
             lockedBusiness.addressId = walletDetails.id;
-            await queryRunner.manager.save(Business, lockedBusiness);
+            await queryRunner.manager.save(lockedBusiness);
             
             // Update our reference to use in response
             Object.assign(business, lockedBusiness);
@@ -706,7 +707,7 @@ export class BusinessService {
       const business = await queryRunner.manager.findOne(Business, {
         where: { id, ...(ownerId ? { ownerId } : {}) },
         relations: ['category', 'bankDetails'],
-      }) as Business;
+      });
 
       if (!business) {
         throw new NotFoundException(`Business with ID ${id} not found`);
@@ -908,13 +909,10 @@ export class BusinessService {
   /**
    * Gets a list of all active categories
    * @param name Optional name to filter categories by
-   * @param ownerId Optional user ID to include their custom categories
    * @returns List of categories
    */
-  async getAllCategories(name?: string, ownerId?: string): Promise<CategoryListResponse> {
-    this.logger.log(`Fetching business categories${name ? ` with name: ${name}` : ''}${ownerId ? ` for user: ${ownerId}` : ''}`);
-    console.log('Owner ID received:', ownerId);
-    
+  async getAllCategories(name?: string): Promise<CategoryListResponse> {
+    this.logger.log(`Fetching business categories${name ? ` with name: ${name}` : ''}`);
     try {
       // Base query for active categories
       let query = this.categoryRepository.createQueryBuilder('category')
@@ -922,35 +920,22 @@ export class BusinessService {
         .andWhere(new Brackets(qb => {
           // Include all non-custom categories
           qb.where('"isCustom" = false');
-
-          // If ownerId is provided, also include custom categories for this user
-          if (ownerId) {
-            console.log('Adding owner condition with ID:', ownerId);
-            qb.orWhere('("isCustom" = true AND "ownerId" = :ownerId)', { ownerId });
-          }
         }));
       
-      // Add name filter if provided - using LIKE for partial match
+      // Add name filter if provided
       if (name) {
-        // Use LOWER for case-insensitive search and % for partial match
-        query = query.andWhere('LOWER(name) LIKE LOWER(:name)', { name: `%${name}%` });
+        query = query.andWhere('name = :name', { name });
       }
-      
-      console.log('Final query SQL:', query.getSql());
-      console.log('Query parameters:', query.getParameters());
       
       // Get categories and count
       const [categories, total] = await query
         .orderBy('name', 'ASC')
         .getManyAndCount();
       
-      console.log('Categories found:', categories.length);
-      console.log('Categories:', categories.map(c => `${c.id} - ${c.name} - isCustom: ${c.isCustom} - ownerId: ${c.ownerId}`).join('\n'));
-      
       this.logger.debug(`Found ${categories.length} active categories`);
 
-      return {
-        categories,
+    return {
+      categories,
         total,
       };
     } catch (error) {
@@ -962,30 +947,20 @@ export class BusinessService {
     }
   }
 
-  /**
-   * Get custom categories for a specific user with optional name filtering
-   * @param ownerId User ID to get custom categories for
-   * @param name Optional name to filter categories by
-   * @returns List of custom categories for the user
-   */
-  async getCustomCategories(ownerId: string, name?: string): Promise<CategoryListResponse> {
-    this.logger.log(`Fetching custom categories for user ${ownerId}${name ? ` with name filter: ${name}` : ''}`);
+  // Add a new method to get custom categories for a user
+  async getCustomCategories(ownerId: string): Promise<CategoryListResponse> {
+    this.logger.log(`Fetching custom categories for user ${ownerId}`);
     try {
-      // Build query with TypeORM query builder for more flexibility
-      let query = this.categoryRepository.createQueryBuilder('category')
-        .where('"isActive" = true')
-        .andWhere('"isCustom" = true')
-        .andWhere('"ownerId" = :ownerId', { ownerId });
-      
-      // Add name filter if provided
-      if (name) {
-        // Case-insensitive partial match
-        query = query.andWhere('LOWER(name) LIKE LOWER(:name)', { name: `%${name}%` });
-      }
-      
-      const [categories, total] = await query
-        .orderBy('name', 'ASC')
-        .getManyAndCount();
+      const [categories, total] = await this.categoryRepository.findAndCount({
+        where: {
+          isActive: true,
+          isCustom: true,
+          ownerId,
+        },
+        order: {
+          name: 'ASC',
+        },
+      });
 
       return {
         categories,
@@ -1158,13 +1133,6 @@ export class BusinessService {
 
       if (!business) {
         throw new NotFoundException(`Business with ID ${businessId} not found`);
-      }
-
-      // Check if business is already approved - return success instead of error
-      if (business.onboardingStep === OnboardingStep.APPROVED) {
-        businessResponseDto.message = 'Business is already approved. No further action needed.';
-        businessResponseDto.data = this.toSimplifiedResponse(business);
-        return businessResponseDto;
       }
 
       // Validate business is in ACCOUNT_SETUP state

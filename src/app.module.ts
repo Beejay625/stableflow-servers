@@ -9,6 +9,7 @@ import { OfframpModule } from './modules/offramp/offramp.module';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './common/guards';
 import { JwtModule } from '@nestjs/jwt';
+import { HealthController } from './health/health.controller';
 
 @Module({
   imports: [
@@ -39,7 +40,9 @@ import { JwtModule } from '@nestjs/jwt';
       inject: [ConfigService],
     }),
   ],
-  controllers: [],
+  controllers: [
+    HealthController
+  ],
   providers: [
     {
       provide: APP_GUARD,

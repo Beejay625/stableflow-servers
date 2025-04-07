@@ -180,97 +180,123 @@ export class BusinessController {
   constructor(private readonly businessService: BusinessService) {}
 
   /**
-   * 🏦 Get Nigerian Banks
+   * 🔍 Filter Businesses by State
    * 
-   * Returns a list of supported Nigerian banks for account verification and linking.
-   * Use this endpoint when setting up business bank accounts or verifying bank details.
+   * Retrieves businesses filtered by their onboarding state. Useful for monitoring
+   * business progress and managing approvals.
    * 
-   * @endpoint GET /businesses/banks
+   * @endpoint GET /businesses/filter
    * @auth Required
    * 
-   * @returns {Object} Bank List Response
+   * @query {string} [state] - Onboarding state to filter by
+   * @query {number} [page=1] - Page number (1-based)
+   * @query {number} [limit=10] - Results per page (max 100)
+   * 
+   * @returns {Object} Filtered Business List
    * ```typescript
    * {
-   *   statusCode: 200,
-   *   message: string,
-   *   data: Array<{
-   *     name: string,     // e.g., "Access Bank"
-   *     code: string,     // e.g., "044"
-   *     type?: string,    // e.g., "commercial"
-   *     category?: string // e.g., "tier-1"
-   *   }>
+   *   businesses: Array<BusinessSummary>,
+   *   total: number,
+   *   page: number,
+   *   limit: number,
+   *   stateMetrics?: {
+   *     NOT_STARTED: number,
+   *     BUSINESS_SETUP: number,
+   *     ACCOUNT_SETUP: number,
+   *     APPROVED: number
+   *   }
    * }
    * ```
    * 
    * @example
    * ```typescript
-   * const response = await api.get('/businesses/banks');
-   * const banks = response.data.data;
-   * // Use banks in a dropdown:
-   * const bankOptions = banks.map(bank => ({
-   *   label: bank.name,
-   *   value: bank.code
-   * }));
+   * // Get businesses pending approval
+   * const pending = await api.get('/businesses/filter', {
+   *   params: {
+   *     state: 'ACCOUNT_SETUP',
+   *     page: 1,
+   *     limit: 50
+   *   }
+   * });
+   * 
+   * // Build an approval queue
+   * const ApprovalQueue = () => {
+   *   const [queue, setQueue] = useState([]);
+   *   
+   *   useEffect(() => {
+   *     const loadQueue = async () => {
+   *       const { businesses } = await api.get('/businesses/filter', {
+   *         params: { state: 'ACCOUNT_SETUP' }
+   *       });
+   *       setQueue(businesses);
+   *     };
+   *     
+   *     loadQueue();
+   *     // Refresh every 5 minutes
+   *     const interval = setInterval(loadQueue, 300000);
+   *     return () => clearInterval(interval);
+   *   }, []);
+   *   
+   *   return (
+   *     <QueueDisplay data={queue} />
+   *   );
+   * };
    * ```
    * 
+   * @error 400 Bad Request - Invalid state or pagination parameters
    * @error 401 Unauthorized - Invalid or missing token
-   * @error 500 Internal Server Error - Failed to fetch banks
    */
-  @Get('banks')
-  @ApiBearerAuth('access-token')
+  @Get('filter')
   @ApiOperation({ 
-    summary: 'Get Nigerian Banks List',
-    description: 'Returns a list of supported Nigerian banks for account verification and linking.'
+    summary: 'Filter Businesses by State',
+    description: 'Retrieves businesses filtered by their onboarding state.'
+  })
+  @ApiQuery({ 
+    name: 'state', 
+    required: false, 
+    enum: ['APPROVED', 'BUSINESS_SETUP', 'NOT_STARTED', 'all'],
+    description: 'Onboarding state filter',
+    example: 'ACCOUNT_SETUP'
+  })
+  @ApiQuery({ 
+    name: 'page', 
+    required: false, 
+    type: Number,
+    description: 'Page number (1-based)',
+    example: 1
+  })
+  @ApiQuery({ 
+    name: 'limit', 
+    required: false, 
+    type: Number,
+    description: 'Results per page (max 100)',
+    example: 10
   })
   @ApiResponse({
     status: 200,
-    description: 'Banks retrieved successfully',
-    schema: {
-      type: 'object',
-      properties: {
-        statusCode: { type: 'number', example: 200 },
-        message: { type: 'string', example: 'Nigerian banks fetched successfully' },
-        data: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', example: 'Access Bank' },
-              code: { type: 'string', example: '044' },
-              type: { type: 'string', example: 'commercial', nullable: true },
-              category: { type: 'string', example: 'tier-1', nullable: true }
-            }
-          }
-        }
-      }
-    }
+    description: 'Filtered businesses retrieved successfully',
+    schema: { $ref: getSchemaPath(BusinessListResponseDto) }
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid state or pagination parameters',
+    type: ErrorResponseDto
   })
   @ApiResponse({
     status: 401,
     description: 'Unauthorized - Invalid or missing token',
     type: ErrorResponseDto
   })
-  @ApiResponse({
-    status: 500,
-    description: 'Internal server error while fetching banks',
-    type: ErrorResponseDto
-  })
-  async getNigerianBanks(): Promise<any> {
-    try {
-      this.logger.log('Getting Nigerian banks from service');
-      const banks = await this.businessService.getNigerianBanks();
-      
-      this.logger.debug(`Successfully retrieved ${banks.length} banks`);
-      
-      return {
-        statusCode: 200,
-        message: 'Nigerian banks fetched successfully',
-        data: banks
-      };
-    } catch (error) {
-      this.logger.error(`Failed to fetch Nigerian banks: ${error.message}`, error.stack);
-      throw error;
-    }
+  async getBusinessesByState(
+    @Query('state') state?: 'APPROVED' | 'BUSINESS_SETUP' | 'NOT_STARTED' | 'all',
+    @Query('page') page?: number,
+    @Query('limit') limit?: number
+  ) {
+    return this.businessService.getBusinessesByState(
+      state,
+      page || 1,
+      limit || 10
+    );
   }
 
   /**
@@ -791,26 +817,29 @@ export class BusinessController {
    */
   @Get()
   @ApiOperation({
-    summary: 'List All Businesses',
-    description: 'Retrieves a paginated list of businesses with optional filtering.'
+    summary: 'Get all businesses',
+    description: 'Retrieves all businesses with pagination and optional verified status filtering'
   })
   @ApiQuery({ 
     name: 'page', 
     required: false, 
+    type: Number,
     description: 'Page number (1-based)',
     example: 1
   })
   @ApiQuery({ 
     name: 'limit', 
     required: false, 
-    description: 'Results per page (max 100)',
+    type: Number,
+    description: 'Results per page',
     example: 10
   })
   @ApiQuery({ 
     name: 'isVerified', 
     required: false, 
-    description: 'Filter by verification status',
-    example: true
+    type: Boolean,
+    description: 'Filter by verification status (true = verified/approved businesses only)',
+    example: 'true'
   })
   @ApiResponse({
     status: 200,
@@ -830,9 +859,19 @@ export class BusinessController {
   async getAllBusinesses(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
-    @Query('isVerified') isVerified?: boolean
+    @Query('isVerified') isVerified?: string
   ) {
-    return this.businessService.getAllBusinesses(page, limit, isVerified);
+    // Convert string query parameters to their proper types
+    const parsedPage = page ? parseInt(page.toString(), 10) : 1;
+    const parsedLimit = limit ? parseInt(limit.toString(), 10) : 10;
+    
+    // Parse isVerified string to boolean
+    let parsedIsVerified: boolean | undefined = undefined;
+    if (isVerified !== undefined) {
+      parsedIsVerified = isVerified.toLowerCase() === 'true';
+    }
+    
+    return this.businessService.getAllBusinesses(parsedPage, parsedLimit, parsedIsVerified);
   }
 
   @Get('categories/all')
@@ -848,7 +887,7 @@ export class BusinessController {
     
     Filtering:
     - Optional name parameter for searching categories
-    - Case-insensitive partial matching
+    - Case-insensitive partial matching (e.g., "re" will match "Retail")
     - Returns all categories if no filter provided
     
     Response Structure:
@@ -862,13 +901,13 @@ export class BusinessController {
       * Timestamps
     
     Note: This endpoint is public and does not require authentication.
-    Categories are pre-defined but may include custom entries.`
+    When authenticated, it will also include the user's custom categories.`
   })
   @ApiQuery({ 
     name: 'name', 
     required: false,
     description: 'Filter categories by name (case-insensitive partial match)',
-    example: 'retail'
+    example: 're'
   })
   @ApiResponse({ 
     status: 200, 
@@ -914,8 +953,17 @@ export class BusinessController {
     description: 'Internal server error while fetching categories',
     type: ErrorResponseDto
   })
-  async getAllCategories(@Query('name') name?: string) {
-    const result = await this.businessService.getAllCategories(name);
+  async getAllCategories(@Query('name') name?: string, @Req() req?: any) {
+    // Extract user ID from request if authenticated
+    console.log('REQUEST OBJECT KEYS:', Object.keys(req || {}));
+    console.log('REQ.USER:', req?.user);
+    
+    const userId = req?.user?.id;
+    console.log('Extracted userId:', userId);
+    
+    const result = await this.businessService.getAllCategories(name, userId);
+    console.log('Categories found:', result.categories.length);
+    console.log('Total categories:', result.total);
     
     const categoryDtos = result.categories.map(category => ({
       id: category.id,
@@ -926,129 +974,13 @@ export class BusinessController {
     }));
     
     return {
+      statusCode: 200,
+      message: 'Success',
+      data: {
       categories: categoryDtos,
       total: result.total
+      }
     };
-  }
-
-  /**
-   * 🔍 Filter Businesses by State
-   * 
-   * Retrieves businesses filtered by their onboarding state. Useful for monitoring
-   * business progress and managing approvals.
-   * 
-   * @endpoint GET /businesses/filter
-   * @auth Required
-   * 
-   * @query {string} [state] - Onboarding state to filter by
-   * @query {number} [page=1] - Page number (1-based)
-   * @query {number} [limit=10] - Results per page (max 100)
-   * 
-   * @returns {Object} Filtered Business List
-   * ```typescript
-   * {
-   *   businesses: Array<BusinessSummary>,
-   *   total: number,
-   *   page: number,
-   *   limit: number,
-   *   stateMetrics?: {
-   *     NOT_STARTED: number,
-   *     BUSINESS_SETUP: number,
-   *     ACCOUNT_SETUP: number,
-   *     APPROVED: number
-   *   }
-   * }
-   * ```
-   * 
-   * @example
-   * ```typescript
-   * // Get businesses pending approval
-   * const pending = await api.get('/businesses/filter', {
-   *   params: {
-   *     state: 'ACCOUNT_SETUP',
-   *     page: 1,
-   *     limit: 50
-   *   }
-   * });
-   * 
-   * // Build an approval queue
-   * const ApprovalQueue = () => {
-   *   const [queue, setQueue] = useState([]);
-   *   
-   *   useEffect(() => {
-   *     const loadQueue = async () => {
-   *       const { businesses } = await api.get('/businesses/filter', {
-   *         params: { state: 'ACCOUNT_SETUP' }
-   *       });
-   *       setQueue(businesses);
-   *     };
-   *     
-   *     loadQueue();
-   *     // Refresh every 5 minutes
-   *     const interval = setInterval(loadQueue, 300000);
-   *     return () => clearInterval(interval);
-   *   }, []);
-   *   
-   *   return (
-   *     <QueueDisplay data={queue} />
-   *   );
-   * };
-   * ```
-   * 
-   * @error 400 Bad Request - Invalid state or pagination parameters
-   * @error 401 Unauthorized - Invalid or missing token
-   */
-  @Get('filter')
-  @ApiOperation({ 
-    summary: 'Filter Businesses by State',
-    description: 'Retrieves businesses filtered by their onboarding state.'
-  })
-  @ApiQuery({ 
-    name: 'state', 
-    required: false, 
-    enum: ['APPROVED', 'BUSINESS_SETUP', 'NOT_STARTED', 'all'],
-    description: 'Onboarding state filter',
-    example: 'ACCOUNT_SETUP'
-  })
-  @ApiQuery({ 
-    name: 'page', 
-    required: false, 
-    type: Number,
-    description: 'Page number (1-based)',
-    example: 1
-  })
-  @ApiQuery({ 
-    name: 'limit', 
-    required: false, 
-    type: Number,
-    description: 'Results per page (max 100)',
-    example: 10
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Filtered businesses retrieved successfully',
-    schema: { $ref: getSchemaPath(BusinessListResponseDto) }
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'Invalid state or pagination parameters',
-    type: ErrorResponseDto
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - Invalid or missing token',
-    type: ErrorResponseDto
-  })
-  async getBusinessesByState(
-    @Query('state') state?: 'APPROVED' | 'BUSINESS_SETUP' | 'NOT_STARTED' | 'all',
-    @Query('page') page?: number,
-    @Query('limit') limit?: number
-  ) {
-    return this.businessService.getBusinessesByState(
-      state,
-      page || 1,
-      limit || 10
-    );
   }
 
   /**
@@ -1191,17 +1123,6 @@ export class BusinessController {
    *     handleError(error);
    *   }
    * };
-   * 
-   * // Error handling helper
-   * const handleError = (error) => {
-   *   if (error.response?.status === 404) {
-   *     showError('Business not found');
-   *   } else if (error.response?.status === 400) {
-   *     showError(error.response.data.message);
-   *   } else {
-   *     showError('Failed to deactivate business');
-   *   }
-   * };
    * ```
    * 
    * @error 400 Bad Request - Invalid request or business state
@@ -1217,6 +1138,7 @@ export class BusinessController {
   @ApiBody({
     schema: {
       type: 'object',
+      required: ['identifier', 'identifierType'],
       properties: {
         identifier: {
           type: 'string',
@@ -1226,11 +1148,10 @@ export class BusinessController {
         identifierType: {
           type: 'string',
           enum: ['id', 'wallet'],
-          description: 'Type of identifier provided',
+          description: 'Type of identifier being provided',
           example: 'id'
         }
-      },
-      required: ['identifier', 'identifierType']
+      }
     }
   })
   @ApiResponse({
@@ -1268,8 +1189,8 @@ export class BusinessController {
   /**
    * ✅ Reactivate Business
    * 
-   * Restores a previously deactivated business's operations. The business can be
-   * identified by either its ID or wallet address.
+   * Reactivates a previously deactivated business to resume operations. The business
+   * can be identified by either its ID or wallet address.
    * 
    * @endpoint POST /businesses/reactivate
    * @auth Required (Admin Only)
@@ -1286,43 +1207,30 @@ export class BusinessController {
    * 
    * @example
    * ```typescript
-   * // Component for managing business status
-   * const BusinessStatusManager = ({ business }) => {
-   *   const [isLoading, setLoading] = useState(false);
-   *   const [error, setError] = useState(null);
-   *   
-   *   const toggleStatus = async () => {
-   *     setLoading(true);
-   *     setError(null);
-   *     
-   *     try {
-   *       const endpoint = business.isActive ? 'deactivate' : 'reactivate';
-   *       await api.post(`/businesses/${endpoint}`, {
-   *         identifier: business.id,
-   *         identifierType: 'id'
-   *       });
-   *       
-   *       // Refresh business data
-   *       await refetchBusiness();
-   *     } catch (error) {
-   *       setError(error.response?.data?.message || 'Operation failed');
-   *     } finally {
-   *       setLoading(false);
-   *     }
-   *   };
-   *   
-   *   return (
-   *     <div>
-   *       <Button
-   *         onClick={toggleStatus}
-   *         disabled={isLoading}
-   *         variant={business.isActive ? 'danger' : 'success'}
-   *       >
-   *         {business.isActive ? 'Deactivate' : 'Reactivate'} Business
-   *       </Button>
-   *       {error && <ErrorAlert message={error} />}
-   *     </div>
-   *   );
+   * // Reactivate by ID
+   * const reactivateById = async (businessId) => {
+   *   try {
+   *     await api.post('/businesses/reactivate', {
+   *       identifier: businessId,
+   *       identifierType: 'id'
+   *     });
+   *     showSuccess('Business reactivated');
+   *   } catch (error) {
+   *     handleError(error);
+   *   }
+   * };
+   * 
+   * // Reactivate by wallet
+   * const reactivateByWallet = async (walletAddress) => {
+   *   try {
+   *     await api.post('/businesses/reactivate', {
+   *       identifier: walletAddress,
+   *       identifierType: 'wallet'
+   *     });
+   *     showSuccess('Business reactivated');
+   *   } catch (error) {
+   *     handleError(error);
+   *   }
    * };
    * ```
    * 
@@ -1334,11 +1242,12 @@ export class BusinessController {
   @Post('reactivate')
   @ApiOperation({ 
     summary: 'Reactivate Business',
-    description: 'Restores a previously deactivated business\'s operations.'
+    description: 'Reactivates a previously deactivated business to resume operations.'
   })
   @ApiBody({
     schema: {
       type: 'object',
+      required: ['identifier', 'identifierType'],
       properties: {
         identifier: {
           type: 'string',
@@ -1348,11 +1257,10 @@ export class BusinessController {
         identifierType: {
           type: 'string',
           enum: ['id', 'wallet'],
-          description: 'Type of identifier provided',
+          description: 'Type of identifier being provided',
           example: 'id'
         }
-      },
-      required: ['identifier', 'identifierType']
+      }
     }
   })
   @ApiResponse({
@@ -1385,6 +1293,100 @@ export class BusinessController {
     @Body('identifierType') identifierType: 'id' | 'wallet'
   ) {
     return this.businessService.reactivateBusinessByIdentifier(identifier, identifierType);
+  }
+
+  /**
+   * 🏦 Get Nigerian Banks
+   * 
+   * Returns a list of supported Nigerian banks for account verification and linking.
+   * Use this endpoint when setting up business bank accounts or verifying bank details.
+   * 
+   * @endpoint GET /businesses/banks
+   * @auth Required
+   * 
+   * @returns {Object} Bank List Response
+   * ```typescript
+   * {
+   *   statusCode: 200,
+   *   message: string,
+   *   data: Array<{
+   *     name: string,     // e.g., "Access Bank"
+   *     code: string,     // e.g., "044"
+   *     type?: string,    // e.g., "commercial"
+   *     category?: string // e.g., "tier-1"
+   *   }>
+   * }
+   * ```
+   * 
+   * @example
+   * ```typescript
+   * const response = await api.get('/businesses/banks');
+   * const banks = response.data.data;
+   * // Use banks in a dropdown:
+   * const bankOptions = banks.map(bank => ({
+   *   label: bank.name,
+   *   value: bank.code
+   * }));
+   * ```
+   * 
+   * @error 401 Unauthorized - Invalid or missing token
+   * @error 500 Internal Server Error - Failed to fetch banks
+   */
+  @Get('banks')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({ 
+    summary: 'Get Nigerian Banks List',
+    description: 'Returns a list of supported Nigerian banks for account verification and linking.'
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Banks retrieved successfully',
+    schema: {
+      type: 'object',
+      properties: {
+        statusCode: { type: 'number', example: 200 },
+        message: { type: 'string', example: 'Nigerian banks fetched successfully' },
+        data: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', example: 'Access Bank' },
+              code: { type: 'string', example: '044' },
+              type: { type: 'string', example: 'commercial', nullable: true },
+              category: { type: 'string', example: 'tier-1', nullable: true }
+            }
+          }
+        }
+      }
+    }
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - Invalid or missing token',
+    type: ErrorResponseDto
+  })
+  @ApiResponse({
+    status: 500,
+    description: 'Internal server error while fetching banks',
+    type: ErrorResponseDto
+  })
+  async getNigerianBanks(): Promise<any> {
+    try {
+      this.logger.log('Getting Nigerian banks from service');
+      const banks = await this.businessService.getNigerianBanks();
+      
+      this.logger.debug(`Successfully retrieved ${banks.length} banks`);
+      
+      return {
+        statusCode: 200,
+        message: 'Nigerian banks fetched successfully',
+        data: banks
+      };
+    } catch (error) {
+      this.logger.error(`Failed to fetch Nigerian banks: ${error.message}`, error.stack);
+      throw error;
+    }
   }
 
   /**
