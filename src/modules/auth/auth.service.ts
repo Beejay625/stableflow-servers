@@ -11,7 +11,6 @@ import { Business, OnboardingStep } from "../business/entities/business.entity";
 import {
   AuthResponseDto,
   BusinessAuthResponseDto,
-  TokenRefreshResponseDto,
 } from "./dto";
 
 @Injectable()
@@ -258,27 +257,9 @@ export class AuthService {
       },
     );
 
-    // Generate refresh token with longer expiration
-    const refreshExpiresIn = parseInt(
-      this.configService.get("JWT_REFRESH_EXPIRATION_SECONDS") || "604800",
-      10,
-    ); // Default 7 days
-    const refreshToken = this.jwtService.sign(
-      {
-        userId: user.id,
-        email: user.email,
-        businessId,
-      },
-      {
-        secret: this.configService.get("JWT_REFRESH_SECRET"),
-        expiresIn: `${refreshExpiresIn}s`,
-      },
-    );
-
     // Create and return the authentication response
     const response: BusinessAuthResponseDto = {
       accessToken,
-      refreshToken,
       expiresIn,
       userId: user.id,
       email: user.email,
@@ -289,135 +270,5 @@ export class AuthService {
     };
 
     return response;
-  }
-
-  /**
-   * Refreshes an authentication token using a valid refresh token
-   * @param refreshToken The refresh token to validate
-   * @param accessToken The expired access token
-   * @returns A new access token and optionally a new refresh token
-   */
-  async refreshToken(
-    refreshToken: string,
-    accessToken: string,
-  ): Promise<TokenRefreshResponseDto> {
-    this.logger.log("Processing token refresh request");
-
-    try {
-      // First, try to decode the access token (without verifying expiration)
-      let accessPayload;
-      try {
-        accessPayload = this.jwtService.decode(accessToken);
-        if (!accessPayload || typeof accessPayload !== "object") {
-          throw new Error("Invalid access token format");
-        }
-      } catch (error) {
-        this.logger.warn(`Invalid access token format: ${error.message}`);
-        throw new UnauthorizedException("Invalid access token format");
-      }
-
-      const { userId: accessUserId, email: accessEmail } = accessPayload;
-
-      if (!accessUserId || !accessEmail) {
-        this.logger.warn(
-          "Invalid access token payload: missing userId or email",
-        );
-        throw new UnauthorizedException("Invalid access token");
-      }
-
-      // Verify the refresh token
-      const decoded = this.jwtService.verify(refreshToken, {
-        secret: this.configService.get("JWT_REFRESH_SECRET"),
-      });
-
-      // Get user information from the refresh token
-      const { userId, email, businessId } = decoded;
-
-      if (!userId || !email) {
-        this.logger.warn(
-          "Invalid refresh token payload: missing userId or email",
-        );
-        throw new UnauthorizedException("Invalid refresh token");
-      }
-
-      // Verify that the user IDs and emails match between both tokens
-      if (userId !== accessUserId || email !== accessEmail) {
-        this.logger.warn(
-          `Token mismatch: refresh token user (${userId}, ${email}) doesn't match access token user (${accessUserId}, ${accessEmail})`,
-        );
-        throw new UnauthorizedException("Token mismatch");
-      }
-
-      // Check if the user exists
-      const user = await this.userRepository.findOne({
-        where: { id: userId, email },
-      });
-
-      if (!user) {
-        this.logger.warn(`User not found for token: ${userId}, ${email}`);
-        throw new UnauthorizedException("User not found");
-      }
-
-      if (!user.isActive) {
-        this.logger.warn(`Inactive user tried to refresh token: ${userId}`);
-        throw new UnauthorizedException("User is inactive");
-      }
-
-      // Generate a new access token
-      const newAccessToken = this.jwtService.sign(
-        {
-          userId,
-          email,
-          businessId,
-        },
-        {
-          secret: this.configService.get("JWT_SECRET"),
-          expiresIn: this.configService.get("JWT_EXPIRATION") || "24h",
-        },
-      );
-
-      // Optionally generate a new refresh token (token rotation)
-      // This is a security best practice to limit damage from leaked refresh tokens
-      const shouldRotateToken =
-        this.configService.get("JWT_REFRESH_ROTATION") === "true";
-      let newRefreshToken = null;
-
-      if (shouldRotateToken) {
-        newRefreshToken = this.jwtService.sign(
-          {
-            userId,
-            email,
-            businessId,
-          },
-          {
-            secret: this.configService.get("JWT_REFRESH_SECRET"),
-            expiresIn: this.configService.get("JWT_REFRESH_EXPIRATION") || "7d",
-          },
-        );
-      }
-
-      const expiresIn = parseInt(
-        this.configService.get("JWT_EXPIRATION_SECONDS") || "86400",
-        10,
-      );
-
-      const response: TokenRefreshResponseDto = {
-        status: "success",
-        accessToken: newAccessToken,
-        expiresIn,
-        businessId,
-      };
-
-      // Include refresh token if we're rotating tokens
-      if (newRefreshToken) {
-        response.refreshToken = newRefreshToken;
-      }
-
-      this.logger.log(`Token refreshed successfully for user ${userId}`);
-      return response;
-    } catch (error) {
-      this.logger.error(`Token refresh failed: ${error.message}`);
-      throw new UnauthorizedException("Invalid or expired token");
-    }
   }
 }

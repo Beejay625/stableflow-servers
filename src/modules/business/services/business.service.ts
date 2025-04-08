@@ -46,7 +46,7 @@ import { WalletService } from "../../wallet/services/wallet.service";
 import { BankDetails, AccountType } from "../entities/bank-details.entity";
 import { HttpService } from "@nestjs/axios";
 import { lastValueFrom } from "rxjs";
-import { retryWithBackoff } from "../../../common/utils/api-utils";
+import { retryWithBackoff } from "../../../common/utils/http.util";
 
 // Define the UpdateBusinessOptions type
 type UpdateBusinessOptions = {

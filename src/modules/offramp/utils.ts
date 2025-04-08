@@ -1,5 +1,9 @@
 import { Token } from './interfaces/transaction.interface';
 import axios from 'axios';
+import * as crypto from 'crypto';
+
+// Import PublicKeyResponse interface or define it here
+import { PublicKeyResponse } from './interfaces/response.interface';
 
 /**
  * Maps environment network configuration and chain to actual network names
@@ -348,6 +352,71 @@ function getTokenInfoByAddress(tokenAddress: string): Token | null {
   return null;
 }
 
+/**
+ * Fetches the aggregator's public key for encrypting sensitive recipient data.
+ * The key is used to ensure recipient banking details are securely transmitted.
+ * 
+ * @param aggregatorUrl - Base URL of the aggregator API
+ * @returns Promise<PublicKeyResponse> - Contains the public key and status
+ * @throws Error if unable to fetch or validate the public key
+ */
+async function fetchAggregatorPublicKey(aggregatorUrl: string): Promise<PublicKeyResponse> {
+  try {
+    const response = await axios.get<PublicKeyResponse>(`${aggregatorUrl}/pubkey`);
+    
+    if (response.data.status !== 'success') {
+      throw new Error(`Failed to fetch public key: ${response.data.message}`);
+    }
+    
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.error(
+        `API error fetching aggregator public key: ${error.message}`,
+        error.response?.data
+      );
+      throw new Error(`Failed to fetch aggregator public key: ${error.message} - ${JSON.stringify(error.response?.data)}`);
+    }
+    
+    console.error(`Error fetching aggregator public key: ${error.message}`);
+    throw new Error(`Failed to fetch aggregator public key: ${error.message}`);
+  }
+}
+
+/**
+ * Encrypts recipient data using RSA-OAEP padding for secure transmission.
+ * 
+ * Security Features:
+ * - Uses RSA-OAEP padding (more secure than PKCS#1 v1.5)
+ * - Converts data to JSON before encryption
+ * - Returns Base64 encoded encrypted data
+ * 
+ * @param data - Recipient data to encrypt (account details, etc.)
+ * @param publicKeyPEM - PEM formatted public key from aggregator
+ * @returns string - Base64 encoded encrypted data
+ * @throws Error if encryption fails
+ */
+function publicKeyEncrypt(data: unknown, publicKeyPEM: string): string {
+  try {
+    const publicKey = crypto.createPublicKey(publicKeyPEM);
+    const buffer = Buffer.from(JSON.stringify(data));
+    
+    // Using RSA-OAEP padding which is more secure than PKCS#1 v1.5
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: publicKey,
+        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      },
+      buffer
+    );
+    
+    return encrypted.toString('base64');
+  } catch (error) {
+    console.error(`Failed to encrypt data: ${error.message}`);
+    throw new Error(`Failed to encrypt data: ${error.message}`);
+  }
+}
+
 export { 
   fetchSupportedTokens,
   getGatewayAddressForNetwork,
@@ -355,5 +424,7 @@ export {
   customSmartContractRead,
   mapNetworkFromConfig,
   getTokenAddress,
-  getTokenInfoByAddress
+  getTokenInfoByAddress,
+  fetchAggregatorPublicKey,
+  publicKeyEncrypt
 };

@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   BadRequestException,
 } from "@nestjs/common";
+import { HttpService } from "@nestjs/axios";
 import { ConfigService } from "@nestjs/config";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -13,29 +14,19 @@ import {
   OnboardingStep,
 } from "../../business/entities/business.entity";
 import { User } from "../../auth/entities/auth.entity";
+import { firstValueFrom } from "rxjs";
 import {
   BlockRadarAddressResponse,
   WalletAddressRequest,
-  TokenBalance,
 } from "../interfaces/wallet.interface";
-import { WalletConfigService } from "../../../common/utils/wallet-config";
-import { AxiosError } from "axios";
-import { WalletHttpService } from "./http.service";
-import { WebhookService } from "./webhook.service";
 
-/**
- * Comprehensive service for wallet operations
- * Handles wallet creation, management, and token operations
- */
 @Injectable()
 export class WalletService {
   private readonly logger = new Logger(WalletService.name);
 
   constructor(
-    private readonly httpService: WalletHttpService,
+    private readonly httpService: HttpService,
     private readonly configService: ConfigService,
-    private readonly walletConfigService: WalletConfigService,
-    private readonly webhookService: WebhookService,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
     @InjectRepository(User)
@@ -198,46 +189,69 @@ export class WalletService {
         showPrivateKey: false,
       };
 
-      // Make API request to generate address
-      const response = await this.httpService.post<any>(
-        url,
-        data,
-        {
-          headers: { "x-api-key": apiKey },
-        },
-        "Wallet address generation"
-      );
-
-      // Extract address from response
-      const walletAddress = response.data?.address;
-      const addressId = response.data?.id;
-      
-      // Convert to expected format if response format doesn't match
-      const formattedResponse: BlockRadarAddressResponse = {
-        message: "OK",
-        statusCode: 200,
-        data: response.data
+      const headers = {
+        "x-api-key": apiKey,
+        "Content-Type": "application/json",
       };
 
-      if (!walletAddress || !addressId) {
-        throw new Error("Failed to generate wallet address: No address returned");
+      this.logger.debug(`Sending request to BlockRadar API: ${url}`);
+
+      // Make request to BlockRadar API
+      const response = await firstValueFrom(
+        this.httpService.post<BlockRadarAddressResponse>(url, data, {
+          headers,
+        }),
+      );
+
+      this.logger.log(
+        `Wallet address generated successfully for business ${businessId}`,
+      );
+
+      // Log the full response for debugging
+      console.log(
+        `[DEBUG] BlockRadar API response:`,
+        JSON.stringify(response.data, null, 2),
+      );
+
+      // Safely extract data from the response with proper error handling
+      if (!response.data) {
+        throw new Error("Empty response from BlockRadar API");
       }
+
+      // Extract wallet address and ID from the response
+      if (!response.data.data || !response.data.data.address) {
+        this.logger.error(
+          `Invalid response structure from BlockRadar API: ${JSON.stringify(response.data)}`,
+        );
+        throw new Error("Invalid wallet address response from BlockRadar API");
+      }
+
+      const walletAddress = response.data.data.address;
+      const blockradarAddressId = response.data.data.id;
+
+      if (!walletAddress) {
+        throw new Error("No wallet address found in BlockRadar API response");
+      }
+
+      if (!blockradarAddressId) {
+        throw new Error("No address ID found in BlockRadar API response");
+      }
+
+      this.logger.log(
+        `Successfully extracted wallet address ${walletAddress} and ID ${blockradarAddressId}`,
+      );
 
       // Save wallet address to business
       await this.saveWalletAddressToBusiness(
         businessId,
         walletAddress,
-        addressId,
+        blockradarAddressId,
       );
 
-      this.logger.log(
-        `Successfully generated wallet address ${walletAddress} for business ${businessId}`,
-      );
-
-      return formattedResponse;
+      return response.data;
     } catch (error) {
       this.logger.error(
-        `Error generating wallet address for business ${businessId}: ${error.message}`,
+        `Error generating wallet address: ${error.message}`,
         error.stack,
       );
       throw new InternalServerErrorException(
@@ -341,28 +355,5 @@ export class WalletService {
         `Failed to save wallet address to business: ${error.message}`,
       );
     }
-  }
-
-  /**
-   * Validate a webhook signature using the configured API key
-   * @param event - The webhook event data
-   * @param signature - The signature to validate
-   * @returns boolean - Whether the signature is valid
-   */
-  validateSignature(event: any, signature: string): boolean {
-    return this.webhookService.validateSignature(event, signature);
-  }
-
-  /**
-   * Request a webhook resend for a transaction
-   * @param transactionId - The ID of the transaction
-   * @param walletConfig - Wallet configuration with walletId and apiKey
-   * @returns Success status and message
-   */
-  async requestWebhookResend(
-    transactionId: string,
-    walletConfig: { walletId: string; apiKey: string },
-  ): Promise<{ success: boolean; message: string }> {
-    return this.webhookService.requestWebhookResend(transactionId, walletConfig);
   }
 }

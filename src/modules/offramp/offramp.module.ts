@@ -11,10 +11,10 @@ import { Business } from "../business/entities/business.entity";
 import { RedisModule } from "../redis/redis.module";
 import { OfframpProcessor } from "./processors/offramp.processor";
 import { MailService } from "../../common/utils/email";
-import { TransactionRecoveryService } from "./services/transaction-recovery.service";
 import { QueueModule } from "../queue/queue.module";
 import { WalletConfigService } from "../../common/utils/wallet-config";
 import { PaycrestModule } from "../paycrest/paycrest.module";
+import { WebhookHandler } from './handlers/webhook.handler';
 
 @Module({
   imports: [
@@ -32,13 +32,13 @@ import { PaycrestModule } from "../paycrest/paycrest.module";
     PrepareTransactionService,
     OfframpProcessor,
     MailService,
-    TransactionRecoveryService,
     WalletConfigService,
+    WebhookHandler,
   ],
   exports: [
     OfframpService,
     PrepareTransactionService,
-    TransactionRecoveryService,
+    WebhookHandler,
   ],
 })
 export class OfframpModule {}

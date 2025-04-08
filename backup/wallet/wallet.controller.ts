@@ -13,9 +13,8 @@ import {
   BadRequestException,
   InternalServerErrorException,
   Res,
+  SetMetadata,
   Logger,
-  Inject,
-  Optional,
 } from "@nestjs/common";
 import {
   ApiOperation,
@@ -24,8 +23,8 @@ import {
   ApiQuery,
 } from "@nestjs/swagger";
 import { WebhookService } from "./services/webhook.service";
-import { WalletService } from "./services/wallet.service";
-import { TransactionService } from "./services/transaction.service";
+import { ValidateSignatureService } from "./services/validatesignature.service";
+import { SortTransactionService } from "./services/sort.transaction.service";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { Request, Response } from "express";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -38,6 +37,8 @@ import { Business } from "../business/entities/business.entity";
 import { RedisService } from "../redis/redis.service";
 import { QueueService } from "../queue/queue.service";
 import { WalletConfigService } from "../../common/utils/wallet-config";
+import { OfframpService } from "../offramp/offramp.service";
+import { ResendWebhookService } from "./services/resendwebhook.service";
 
 /**
  * Controller for wallet-related functionality
@@ -51,8 +52,7 @@ export class WalletController {
 
   constructor(
     private readonly webhookService: WebhookService,
-    private readonly transactionService: TransactionService,
-    private readonly walletService: WalletService,
+    private readonly sortTransactionService: SortTransactionService,
     private readonly redisService: RedisService,
     private readonly queueService: QueueService,
     private readonly walletConfigService: WalletConfigService,
@@ -61,9 +61,9 @@ export class WalletController {
     private readonly transactionRepository: Repository<Transaction>,
     @InjectRepository(Business)
     private readonly businessRepository: Repository<Business>,
-    @Inject('OfframpService')
-    @Optional()
-    private readonly offrampService?: any,
+    private readonly offrampService: OfframpService,
+    private readonly resendWebhookService: ResendWebhookService,
+    private readonly validateSignatureService: ValidateSignatureService,
   ) {}
 
   /**
@@ -92,7 +92,7 @@ export class WalletController {
       this.logger.debug(`Received signature: ${signature}`);
 
       // Validate webhook signature using the appropriate API key
-      const isValid = this.webhookService.validateSignature(
+      const isValid = this.validateSignatureService.validateSignature(
         payload,
         signature,
       );
@@ -112,7 +112,7 @@ export class WalletController {
 
       // Find business by recipient address
       const business =
-        await this.transactionService.findBusinessForTransaction(
+        await this.sortTransactionService.findBusinessForTransaction(
           recipientAddress,
         );
 
@@ -129,7 +129,7 @@ export class WalletController {
           `Business ${business.id} is not active or not approved. isActive: ${business.isActive}, onboardingStep: ${business.onboardingStep}`,
         );
         // Save transaction but don't queue it
-        await this.transactionService.saveTransactionToBusiness(
+        await this.sortTransactionService.saveTransactionToBusiness(
           payload,
           business,
           false,
@@ -138,7 +138,7 @@ export class WalletController {
       }
 
       // Save and queue transaction
-      await this.transactionService.saveTransactionToBusiness(
+      await this.sortTransactionService.saveTransactionToBusiness(
         payload,
         business,
         true,
@@ -181,7 +181,55 @@ export class WalletController {
       "Retrieve statistics about transactions including status counts and processing metrics",
   })
   async getTransactionStats() {
-    return this.transactionService.getTransactionStats();
+    // Count transactions by status (processing, completed, failed, etc.)
+    const statusCounts = await this.transactionRepository
+      .createQueryBuilder("transaction")
+      .select("transaction.status", "status")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("transaction.status")
+      .getRawMany();
+
+    // Calculate total transaction value across the system
+    const totalAmountResult = await this.transactionRepository
+      .createQueryBuilder("transaction")
+      .select("SUM(transaction.tokenAmount)", "total")
+      .getRawOne();
+
+    // Get recent transactions (last 30 days) for trend analysis
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const recentCount = await this.transactionRepository.count({
+      where: {
+        receivedAt: MoreThanOrEqual(thirtyDaysAgo),
+      },
+    });
+
+    // Identify top 5 businesses by transaction volume
+    const businessCounts = await this.transactionRepository
+      .createQueryBuilder("transaction")
+      .select("transaction.businessId", "businessId")
+      .addSelect("COUNT(*)", "count")
+      .groupBy("transaction.businessId")
+      .orderBy("count", "DESC")
+      .limit(5)
+      .getRawMany();
+
+    // Structure and return the aggregated data
+    return {
+      status: statusCounts.reduce((acc, curr) => {
+        acc[curr.status] = parseInt(curr.count, 10);
+        return acc;
+      }, {}),
+      total: {
+        count: await this.transactionRepository.count(),
+        amount: parseFloat(totalAmountResult?.total || "0"),
+      },
+      recent: {
+        last30Days: recentCount,
+      },
+      byBusiness: businessCounts,
+    };
   }
 
   /**
@@ -231,7 +279,7 @@ export class WalletController {
     page = Math.max(1, page);
     limit = Math.max(1, Math.min(100, limit)); // Cap at 100 items per page
 
-    return this.transactionService.getTransactionsByBusinessId(
+    return this.sortTransactionService.getTransactionsByBusinessId(
       businessId,
       page,
       limit,
@@ -265,26 +313,31 @@ export class WalletController {
     @Param("transactionId") transactionId: string,
     @Req() request: Request & { user: { id: string } },
   ) {
-    return this.transactionService.completeTransaction(
-      transactionId, 
-      request.user.id
-    );
-  }
+    // Find the transaction to update
+    const transaction = await this.transactionRepository.findOne({
+      where: { transactionId },
+    });
 
-  /**
-   * Request Blockradar to resend a transaction webhook
-   * @param transactionId - ID of the transaction
-   * @returns Success status and message
-   */
-  @Post("webhook/resend/:transactionId")
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth("access-token")
-  @ApiOperation({
-    summary: "Request webhook resend",
-    description: "Request Blockradar to resend a transaction webhook",
-  })
-  async requestWebhookResend(@Param("transactionId") transactionId: string) {
-    const walletConfig = this.walletConfigService.getWalletConfig({});
-    return this.webhookService.requestWebhookResend(transactionId, walletConfig);
+    if (!transaction) {
+      throw new Error(`Transaction ${transactionId} not found`);
+    }
+
+    // Update status and add audit information in metadata for accountability
+    transaction.status = TransactionStatus.SETTLED;
+    transaction.metadata = {
+      ...(transaction.metadata || {}),
+      manuallyCompleted: true,
+      completedBy: request.user.id,
+      completedAt: new Date().toISOString(),
+    };
+
+    // Save the updated transaction with the audit trail
+    const result = await this.transactionRepository.save(transaction);
+
+    return {
+      success: true,
+      message: `Transaction ${transactionId} manually marked as completed`,
+      transaction: result,
+    };
   }
 }

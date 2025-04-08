@@ -48,26 +48,20 @@ export class OfframpProcessor {
       });
 
       if (!transaction) {
-        this.logger.warn(
-          `Transaction ${transactionId} not found in database, skipping`,
-        );
+        this.logger.warn(`Transaction ${transactionId} not found in database, skipping`);
         return { success: false, error: "Transaction not found" };
       }
 
       // Check if transaction is still queued in Redis
       const isQueued = await this.redisService.get(`tx:${transactionId}`);
       if (!isQueued) {
-        this.logger.warn(
-          `Transaction ${transactionId} not found in Redis queue, skipping`,
-        );
+        this.logger.warn(`Transaction ${transactionId} not found in Redis queue, skipping`);
         return { success: false, error: "Transaction not in queue" };
       }
 
       // Check if transaction is still in UNSETTLED state
       if (transaction.status !== TransactionStatus.UNSETTLED) {
-        this.logger.warn(
-          `Transaction ${transactionId} is not in UNSETTLED state (${transaction.status}), skipping`,
-        );
+        this.logger.warn(`Transaction ${transactionId} is not in UNSETTLED state (${transaction.status}), skipping`);
         await this.redisService.del(`tx:${transactionId}`);
         return { success: false, error: "Transaction not in UNSETTLED state" };
       }
@@ -85,9 +79,7 @@ export class OfframpProcessor {
       if (result.status !== TransactionStatus.UNSETTLED) {
         // Remove from Redis queue on success
         await this.redisService.del(`tx:${transactionId}`);
-        this.logger.log(
-          `Successfully processed offramp for transaction ${transactionId}`,
-        );
+        this.logger.log(`Successfully processed offramp for transaction ${transactionId}`);
         return { success: true };
       } else {
         // If still UNSETTLED, check for terminal errors
@@ -100,9 +92,7 @@ export class OfframpProcessor {
 
         // For non-terminal errors, keep in queue and retry
         if (!updatedTransaction?.metadata?.offramp?.errors?.[0]?.isTerminal) {
-          this.logger.warn(
-            `Non-terminal error for transaction ${transactionId}, will retry: ${errorMessage}`,
-          );
+          this.logger.warn(`Non-terminal error for transaction ${transactionId}, will retry: ${errorMessage}`);
           throw new Error(errorMessage); // This will trigger Bull's retry mechanism
         }
 
@@ -137,11 +127,8 @@ export class OfframpProcessor {
         return { success: false, error: errorMessage };
       }
     } catch (error) {
-      this.logger.error(
-        `Error processing offramp for transaction ${transactionId}: ${error.message}`,
-        error.stack,
-      );
-
+      this.logger.error(`Error processing offramp for transaction ${transactionId}: ${error.message}`);
+      
       // Let Bull handle the retry
       throw error;
     }

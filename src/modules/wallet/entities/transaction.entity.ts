@@ -14,94 +14,92 @@ import { TransactionStatus } from "../constants/status.enum";
 // Commenting out import since offramp is in skeleton form
 // import { OfframpAttempt } from './offramp-attempt.entity';
 
-@Entity("transactions")
+@Entity({ name: "transactions" })
 export class Transaction {
   @PrimaryGeneratedColumn("uuid")
   id: string;
 
-  @Column({ unique: true })
+  @Column({ nullable: false, unique: true })
   @Index()
   transactionId: string;
 
-  @Column({
-    type: "decimal",
-    precision: 20,
-    scale: 8,
-    default: 0,
-  })
+  @Column({ nullable: false })
+  @Index()
+  businessId: string;
+
+  @Column({ type: "float", default: 0 })
   tokenAmount: number;
 
-  @Column({
-    nullable: true,
-    type: "numeric",
-    precision: 10,
-    scale: 2,
-  })
+  @Column({ type: "float", nullable: true })
   fiatAmount: number;
 
+  @Column({ nullable: true })
+  fiatCurrency: string;
+
+  @Column({ nullable: false })
+  token: string;
+
+  @Column({ nullable: false })
+  chain: string;
+
+  @Column({
+    type: "varchar",
+    default: TransactionStatus.UNSETTLED,
+  })
+  status: string; // Using string type for status
+
+  @Column({ nullable: true })
+  txHash: string;
+
+  @Column({ nullable: true })
+  gatewayTxId: string;
+
+  @Column({ nullable: true })
+  senderAddress: string;
+
+  @Column({ nullable: true })
+  businessAddress: string;
+
+  @Column({ nullable: true })
+  addressId: string;
+
+  @Column({ nullable: true })
+  walletId: string;
+
+  @Column({ type: "float", nullable: true })
+  exchangeRate: number;
+
+  @Column({ nullable: true })
+  settlementProvider: string;
+
+  @Column({ nullable: true })
+  settlementReference: string;
+
+  @Column({ nullable: true })
+  offrampOrderId: string;
+
+  @Column({ default: false })
+  isSettled: boolean;
+
+  @Column({ nullable: true })
+  settledAt: Date;
+
+  @Column({ nullable: true })
+  processedAt: Date;
+
+  @Column({ type: "jsonb", nullable: true })
+  metadata: any;
+
+  @Column({ nullable: true, type: "jsonb" })
+  settlementData: any;
+
   @CreateDateColumn()
-  @Index()
   receivedAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @Column()
-  token: string; // Token symbol (e.g. USDT, USDC)
-
-  @Column({
-    nullable: true,
-  })
-  chain: string; // Blockchain name (e.g. BNB smart chain, Ethereum)
-
-  @Column({
-    type: "enum",
-    enum: TransactionStatus,
-    default: TransactionStatus.UNSETTLED,
-  })
-  @Index()
-  status: TransactionStatus;
-
-  @Column({
-    default: "unknown",
-  })
-  @Index()
-  businessAddress: string;
-
-  @Column({
-    default: "unknown",
-  })
-  senderAddress: string;
-
-  @Column({
-    nullable: true,
-  })
-  walletId: string;
-
-  @Column({
-    default: "unknown",
-  })
-  @Index()
-  addressId: string;
-
-  @Column({ type: "json", nullable: true })
-  metadata: Record<string, any>;
-
-  @Column({ nullable: true })
-  offrampOrderId: string;
-
-  @Column({ type: "timestamp", nullable: true })
-  processedAt: Date;
-
-  @Column({ type: "jsonb", nullable: true })
-  preparationData: any;
-
-  // Relationships
-  @ManyToOne(() => Business, (business) => business.transactions)
+  @ManyToOne(() => Business)
   @JoinColumn({ name: "businessId" })
   business: Business;
-
-  @Column()
-  @Index()
-  businessId: string;
 }

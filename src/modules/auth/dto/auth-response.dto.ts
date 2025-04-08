@@ -8,13 +8,6 @@ export class AuthResponseDto {
   accessToken: string;
 
   @ApiProperty({
-    description: "JWT refresh token for obtaining new access tokens",
-    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    required: false,
-  })
-  refreshToken?: string;
-
-  @ApiProperty({
     description: "Token expiration time in seconds",
     example: 86400,
     required: false,

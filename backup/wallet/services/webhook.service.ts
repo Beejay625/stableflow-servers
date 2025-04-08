@@ -1,12 +1,11 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { HttpService } from "@nestjs/axios";
+import { firstValueFrom } from "rxjs";
 import { AxiosError } from "axios";
 import * as crypto from "crypto";
 import { RedisService } from "../../redis/redis.service";
 import { WalletConfigService } from "../../../common/utils/wallet-config";
-import { WebhookPayload } from "../interfaces/wallet.interface";
-import { WalletHttpService } from "./http.service";
-import { API_PATHS } from "../constants/api-paths";
 
 /**
  * Service for handling webhook events from blockchain providers
@@ -20,7 +19,7 @@ export class WebhookService {
     private readonly configService: ConfigService,
     private readonly redisService: RedisService,
     private readonly walletConfigService: WalletConfigService,
-    private readonly httpService: WalletHttpService,
+    private readonly httpService: HttpService,
   ) {}
 
   /**
@@ -58,7 +57,7 @@ export class WebhookService {
    * @param payload - The webhook payload
    * @returns Object containing extracted transaction data
    */
-  extractWebhookData(payload: WebhookPayload): {
+  extractWebhookData(payload: any): {
     transactionId: string;
     eventType: string;
     chain: string | null;
@@ -71,8 +70,8 @@ export class WebhookService {
 
     // Extract only what's needed for processing with defaults
     return {
-      transactionId: (data.id || payload.id || "").toString(),
-      eventType: (data.event_type || data.eventType || payload.event || "").toString(),
+      transactionId: data.id || payload.id || "",
+      eventType: data.event_type || data.eventType || payload.event || "",
       chain: chain || null,
     };
   }
@@ -124,20 +123,21 @@ export class WebhookService {
       this.logger.log(
         `Requesting webhook resend for transaction: ${transactionId}`,
       );
-      
-      const url = `${API_PATHS.BLOCKRADAR.WEBHOOK_RESEND(walletConfig.walletId)}`;
+      const baseUrl = "https://api.blockradar.co/v1";
+      const url = `${baseUrl}/wallets/${walletConfig.walletId}/transactions/webhooks/resend`;
 
-      const response = await this.httpService.post<any>(
-        url,
-        { id: transactionId },
-        {
-          headers: { "x-api-key": walletConfig.apiKey },
-        },
-        "Webhook resend request"
+      const response = await firstValueFrom(
+        this.httpService.post(
+          url,
+          { id: transactionId },
+          {
+            headers: { "x-api-key": walletConfig.apiKey },
+          },
+        ),
       );
 
       this.logger.debug(
-        `Webhook resend response for ${transactionId}: ${JSON.stringify(response)}`,
+        `Webhook resend response for ${transactionId}: ${JSON.stringify(response.data)}`,
       );
 
       return {

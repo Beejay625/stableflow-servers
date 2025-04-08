@@ -1,10 +1,8 @@
 import { Module } from "@nestjs/common";
 import { QueueService } from "./queue.service";
 import { RedisModule } from "../redis/redis.module";
-import { TransactionQueueService } from "./services/transaction-queue.service";
 import { BullModule } from "@nestjs/bull";
 import { ConfigModule, ConfigService } from "@nestjs/config";
-import { TransactionRepository } from "../wallet/repositories/transaction.repository";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { Transaction } from "../wallet/entities/transaction.entity";
 
@@ -38,7 +36,7 @@ import { Transaction } from "../wallet/entities/transaction.entity";
     }),
     TypeOrmModule.forFeature([Transaction]),
   ],
-  providers: [QueueService, TransactionQueueService, TransactionRepository],
-  exports: [QueueService, TransactionQueueService, TransactionRepository],
+  providers: [QueueService],
+  exports: [QueueService],
 })
 export class QueueModule {}

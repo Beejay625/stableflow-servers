@@ -1,2 +1,1 @@
 export * from "./wallet.interface";
-export * from "./http.interface";

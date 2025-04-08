@@ -1,10 +1,11 @@
-import { HttpStatus } from "@nestjs/common";
-import { AxiosError } from "axios";
-import { HttpErrorException } from "../exceptions";
+import { HttpException, HttpStatus } from "@nestjs/common";
+import { HttpErrorException } from "../exceptions/http-error.exception";
+import axios, { AxiosError } from "axios";
 
 interface ErrorResponse {
   message?: string;
   error?: string;
+  code?: string;
   [key: string]: any;
 }
 
@@ -29,44 +30,62 @@ export const formatQueryParams = (params: Record<string, any>): string => {
 /**
  * Handles Axios errors and transforms them into HttpErrorException
  * @param error Axios error object
+ * @param customMessage Optional custom message to prefix the error
  * @throws HttpErrorException
  */
-export const handleAxiosError = (error: AxiosError<ErrorResponse>): never => {
-  if (error.response) {
-    // The request was made and the server responded with a status code
-    // that falls out of the range of 2xx
-    const status = error.response.status;
-    const message =
-      error.response.data?.message ||
-      error.response.data?.error ||
-      error.message;
+export const handleAxiosError = (error: any, customMessage?: string): never => {
+  if (axios.isAxiosError(error)) {
+    const axiosError = error as AxiosError<ErrorResponse>;
+    const status =
+      axiosError.response?.status || HttpStatus.INTERNAL_SERVER_ERROR;
 
-    // Add details to message to avoid using the 4th parameter
-    const detailedMessage = `${message} - URL: ${error.config?.url || "unknown"}, Method: ${error.config?.method || "unknown"}`;
-    throw new HttpErrorException(
-      detailedMessage,
-      status,
-      "HTTP_REQUEST_FAILED",
-    );
+    // Extract message from response data or error object
+    const responseData = axiosError.response?.data as ErrorResponse;
+    let message =
+      responseData?.message ||
+      responseData?.error ||
+      axiosError.message ||
+      "An error occurred with the API request";
+
+    // Add custom message prefix if provided
+    if (customMessage) {
+      message = `${customMessage}: ${message}`;
+    }
+
+    // Add details to message for better debugging
+    const detailedMessage = `${message} - URL: ${axiosError.config?.url || "unknown"}, Method: ${axiosError.config?.method || "unknown"}`;
+    
+    const code = responseData?.code || "HTTP_REQUEST_FAILED";
+
+    throw new HttpErrorException(detailedMessage, status, code);
   } else if (error.request) {
     // The request was made but no response was received
     const detailedMessage = `Service Unavailable - URL: ${error.config?.url || "unknown"}`;
+    const message = customMessage
+      ? `${customMessage}: ${detailedMessage}`
+      : detailedMessage;
     throw new HttpErrorException(
-      detailedMessage,
+      message,
       HttpStatus.SERVICE_UNAVAILABLE,
       "SERVICE_UNAVAILABLE",
     );
   } else {
     // Something happened in setting up the request that triggered an Error
+    const message = customMessage
+      ? `${customMessage}: ${error.message || "Unknown error"}`
+      : "Internal Server Error";
     throw new HttpErrorException(
-      "Internal Server Error",
+      message,
       HttpStatus.INTERNAL_SERVER_ERROR,
       "REQUEST_SETUP_FAILED",
     );
   }
 };
 
-interface RetryOptions {
+/**
+ * Options for retry operations
+ */
+export interface RetryOptions {
   maxAttempts: number;
   initialDelay: number;
 }
@@ -92,6 +111,9 @@ export const retryWithBackoff = async <T>(
       if (attempt === maxAttempts) {
         throw error;
       }
+
+      // Optionally log retry attempts
+      console.log(`Retrying after ${delay}ms (attempt ${attempt}/${maxAttempts})`);
 
       // Wait for the calculated delay
       await new Promise((resolve) => setTimeout(resolve, delay));

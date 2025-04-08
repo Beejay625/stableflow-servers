@@ -5,17 +5,17 @@ export {
   passwordResetEmailTemplate,
 } from "./email-templates";
 
-// Api utilities
-export {
-  handleAxiosError as apiHandleAxiosError,
-  retryWithBackoff as apiRetryWithBackoff,
-} from "./api-utils";
-
 // HTTP utilities
 export {
   formatQueryParams,
+  handleAxiosError,
+  retryWithBackoff,
+  RetryOptions,
+  // Aliases for backward compatibility
+  handleAxiosError as apiHandleAxiosError,
   handleAxiosError as httpHandleAxiosError,
   retryWithBackoff as httpRetryWithBackoff,
+  retryWithBackoff as apiRetryWithBackoff,
 } from "./http.util";
 
 // String utilities

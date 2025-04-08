@@ -1,9 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { HttpService } from "@nestjs/axios";
-import { lastValueFrom, Observable } from "rxjs";
-import { handleAxiosError } from "../../common/utils/api-utils";
-import { retryWithBackoff } from "../../common/utils/api-utils";
+import { handleAxiosError, retryWithBackoff } from "../../common/utils/http.util";
 import {
   Institution,
   PaycrestResponse,
@@ -58,35 +56,26 @@ export class PaycrestService {
         `Getting institutions for currency: ${currencyCode || "all"}`,
       );
 
-      // If a specific currency is requested, fetch directly from the API
       if (currencyCode) {
-        const response = await lastValueFrom<
-          AxiosResponse<PaycrestResponse<Institution[]>>
-        >(
-          this.httpClient
-            .get<PaycrestResponse<Institution[]>>(
-              `institutions/${currencyCode}`,
-              {
-                baseURL: this.baseUrl,
-                headers: this.headers,
-                timeout: DEFAULT_TIMEOUT,
-              },
-            )
-            .pipe(
-              retryWithBackoff(DEFAULT_RETRY_ATTEMPTS, DEFAULT_TIMEOUT),
-            ) as Observable<AxiosResponse<PaycrestResponse<Institution[]>>>,
+        const response = await this.httpClient.axiosRef.get<PaycrestResponse<Institution[]>>(
+          `institutions/${currencyCode}`,
+          {
+            baseURL: this.baseUrl,
+            headers: this.headers,
+            timeout: DEFAULT_TIMEOUT,
+          }
         );
-
+        
         if (response.data?.data && Array.isArray(response.data.data)) {
           return response.data.data.map((institution) => ({
             ...institution,
             supportedCurrencies: [currencyCode],
           }));
         }
-
+        
         return [];
       }
-
+      
       // If no currency specified, default to NGN
       return this.getInstitutions("NGN");
     } catch (error) {
@@ -108,19 +97,17 @@ export class PaycrestService {
   ): Promise<PaycrestResponse<any>> {
     try {
       this.logger.debug(`Getting exchange rate: ${JSON.stringify(data)}`);
-      const response = await lastValueFrom<
-        AxiosResponse<PaycrestResponse<any>>
-      >(
-        this.httpClient
-          .post<PaycrestResponse<any>>("exchange-rate", data, {
-            baseURL: this.baseUrl,
-            headers: this.headers,
-            timeout: DEFAULT_TIMEOUT,
-          })
-          .pipe(
-            retryWithBackoff(DEFAULT_RETRY_ATTEMPTS, DEFAULT_TIMEOUT),
-          ) as Observable<AxiosResponse<PaycrestResponse<any>>>,
+      
+      const response = await this.httpClient.axiosRef.post<PaycrestResponse<any>>(
+        "exchange-rate", 
+        data, 
+        {
+          baseURL: this.baseUrl,
+          headers: this.headers,
+          timeout: DEFAULT_TIMEOUT,
+        }
       );
+      
       return response.data;
     } catch (error) {
       this.logger.error(
@@ -147,22 +134,16 @@ export class PaycrestService {
   ): Promise<PaycrestResponse<any>> {
     try {
       this.logger.debug(`Getting token rate for ${token}/${fiat}`);
-      const response = await lastValueFrom<
-        AxiosResponse<PaycrestResponse<any>>
-      >(
-        this.httpClient
-          .get<PaycrestResponse<any>>(
-            `rates/${token}/${amount}/${fiat}${providerId ? `/${providerId}` : ""}`,
-            {
-              baseURL: this.baseUrl,
-              headers: this.headers,
-              timeout: DEFAULT_TIMEOUT,
-            },
-          )
-          .pipe(
-            retryWithBackoff(DEFAULT_RETRY_ATTEMPTS, DEFAULT_TIMEOUT),
-          ) as Observable<AxiosResponse<PaycrestResponse<any>>>,
+      
+      const response = await this.httpClient.axiosRef.get<PaycrestResponse<any>>(
+        `rates/${token}/${amount}/${fiat}${providerId ? `/${providerId}` : ""}`,
+        {
+          baseURL: this.baseUrl,
+          headers: this.headers,
+          timeout: DEFAULT_TIMEOUT,
+        }
       );
+      
       return response.data;
     } catch (error) {
       this.logger.error(

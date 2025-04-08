@@ -5,15 +5,12 @@ import {
   Logger,
   HttpCode,
   HttpStatus,
-  Headers,
-  UnauthorizedException,
 } from "@nestjs/common";
 import {
   ApiTags,
   ApiOperation,
   ApiResponse,
   ApiBody,
-  ApiBearerAuth,
 } from "@nestjs/swagger";
 import { AuthService } from "./auth.service";
 import {
@@ -21,8 +18,6 @@ import {
   AuthResponseDto,
   ValidateOtpDto,
   BusinessAuthResponseDto,
-  RefreshTokenDto,
-  TokenRefreshResponseDto,
 } from "./dto";
 import { Public } from "../../common/decorators/public.decorator";
 import { normalizeEmail } from "../../common/utils";
@@ -87,45 +82,6 @@ export class AuthController {
     );
     this.logger.log(`Final response object: ${JSON.stringify(response)}`);
 
-    return response;
-  }
-
-  @Public()
-  @ApiOperation({ summary: "Refresh authentication token" })
-  @ApiBearerAuth("access-token")
-  @ApiResponse({
-    status: 200,
-    description: "Token refreshed successfully",
-    type: TokenRefreshResponseDto,
-  })
-  @ApiResponse({
-    status: 401,
-    description: "Invalid or expired token",
-  })
-  @ApiBody({ type: RefreshTokenDto })
-  @Post("refresh-token")
-  @HttpCode(HttpStatus.OK)
-  async refreshToken(
-    @Headers("authorization") authHeader: string,
-    @Body() refreshTokenDto: RefreshTokenDto,
-  ): Promise<TokenRefreshResponseDto> {
-    this.logger.log("Processing token refresh request");
-
-    // Extract the Bearer token from Authorization header
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      throw new UnauthorizedException(
-        "Missing or invalid Authorization header",
-      );
-    }
-
-    const accessToken = authHeader.substring(7); // Remove 'Bearer ' prefix
-
-    const response = await this.authService.refreshToken(
-      refreshTokenDto.refreshToken,
-      accessToken,
-    );
-
-    this.logger.log("Token refreshed successfully");
     return response;
   }
 }
