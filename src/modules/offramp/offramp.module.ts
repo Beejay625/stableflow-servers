@@ -18,6 +18,9 @@ import { OfframpTransaction } from './entities/offramp-transaction.entity';
 import { BlockchainService } from "./services/blockchain.service";
 import { OfframpApiService } from "./services/offramp-api.service";
 import { TransactionManagerService } from "./services/transaction-manager.service";
+import { RecoveryProcessor } from './processors/recovery';
+import { FailedRecoveryProcessor } from './processors/failed_recovery';
+import { BullModule } from "@nestjs/bull";
 
 @Module({
   imports: [
@@ -28,6 +31,15 @@ import { TransactionManagerService } from "./services/transaction-manager.servic
     ScheduleModule.forRoot(),
     QueueModule,
     PaycrestModule,
+    BullModule.registerQueue({
+      name: 'transaction-processing',
+    }),
+    BullModule.registerQueue({
+      name: 'processing-attempt',
+    }),
+    BullModule.registerQueue({
+      name: 'failed-recovery',
+    }),
   ],
   providers: [
     OfframpService,
@@ -39,6 +51,8 @@ import { TransactionManagerService } from "./services/transaction-manager.servic
     BlockchainService,
     OfframpApiService,
     TransactionManagerService,
+    RecoveryProcessor,
+    FailedRecoveryProcessor,
   ],
   exports: [
     OfframpService,

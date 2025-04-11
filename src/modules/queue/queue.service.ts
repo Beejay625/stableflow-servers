@@ -1,6 +1,6 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bull";
-import { Queue, Job } from "bull";
+import { Queue, Job, JobOptions } from "bull";
 import { RedisService } from "../redis/redis.service";
 import { QueueError } from "./queue.error";
 
@@ -21,9 +21,10 @@ export class QueueService {
    * Add an item to a queue
    * @param queueName - The name of the queue
    * @param data - The data to add to the queue
+   * @param options - Optional Bull job options (priority, delay, etc.)
    * @returns Promise<Job<any>> - The job that was added to the queue
    */
-  async addToQueue(queueName: string, data: any): Promise<Job<any>> {
+  async addToQueue(queueName: string, data: any, options?: JobOptions): Promise<Job<any>> {
     try {
       // Ensure data is in a format supported by Redis
       const jobData =
@@ -31,16 +32,22 @@ export class QueueService {
           ? { ...data } // Create a new object to avoid reference issues
           : { value: data }; // Wrap primitives in an object
 
-      // Add the job to the queue
-      const job = await this.transactionQueue.add("process", jobData, {
+      // Default job options
+      const defaultOptions = {
         attempts: 3,
         backoff: {
           type: "exponential",
           delay: 5000, // 5 seconds
         },
-      });
+      };
 
-      this.logger.log(`Added job ${job.id} to queue ${queueName}`);
+      // Merge default options with any provided options
+      const jobOptions = options ? { ...defaultOptions, ...options } : defaultOptions;
+
+      // Add the job to the queue
+      const job = await this.transactionQueue.add("process", jobData, jobOptions);
+
+      this.logger.log(`Added job ${job.id} to queue ${queueName}${options?.priority ? ' with priority ' + options.priority : ''}`);
       return job;
     } catch (error) {
       this.logger.error(

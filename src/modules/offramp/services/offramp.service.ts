@@ -28,6 +28,7 @@ import { OrderService } from './orderservice';
 import { BlockchainService } from './blockchain.service';
 import { OfframpApiService } from './offramp-api.service';
 import { TransactionManagerService } from './transaction-manager.service';
+import { QueueService } from '../../queue/queue.service';
 
 @Injectable()
 export class OfframpService {
@@ -59,7 +60,8 @@ export class OfframpService {
     private readonly connection: Connection,
     private readonly blockchainService: BlockchainService,
     private readonly offrampApiService: OfframpApiService,
-    private readonly transactionManager: TransactionManagerService
+    private readonly transactionManager: TransactionManagerService,
+    private readonly queueService: QueueService
   ) {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.ngnProviderId = this.configService.get<string>('NGN_PROVIDER_ID');
@@ -386,6 +388,18 @@ export class OfframpService {
         failureReason
       );
       
+      // Add to failed-recovery queue for automated recovery
+      try {
+        await this.queueService.addToQueue("failed-recovery", {
+          transactionId,
+          error: error.message,
+          context: failureReason || 'Order creation failed'
+        });
+        this.logger.log(`Transaction ${transactionId} added to failed-recovery queue`);
+      } catch (queueError) {
+        this.logger.error(`Failed to add ${transactionId} to failed-recovery queue: ${queueError.message}`);
+      }
+      
       // Return FAILED status
       return {
         txHash: 'error',
@@ -409,8 +423,8 @@ export class OfframpService {
     orderId: string, 
     transactionId: string
   ): Promise<void> {
-    const pollInterval = 3000; // 3 seconds
-    const maxAttempts = 5; // 15 seconds total (5 * 3000ms)
+    const pollInterval = 1000; // 3 seconds
+    const maxAttempts = 2; // 15 seconds total (5 * 3000ms)
     
     // Get transaction data once before starting polling
     const existingTransaction = await this.transactionRepository.findOne({ 
@@ -443,8 +457,21 @@ export class OfframpService {
           if (attempts > maxAttempts) {
             this.logger.warn(`Max polling attempts reached for order ${orderId}`);
             
-            // After final attempt, do one last safety check to make sure the transaction didn't revert
-            await this.blockchainService.verifyTransactionFinalState(chainId, orderId, transactionId);
+            // Add to processing-attempt queue for later retry
+            try {
+              await this.queueService.addToQueue("processing-attempt", {
+                transactionId,
+                orderId,
+                chainId
+              }, {
+                priority: 1,  // Highest priority
+                lifo: true    // Last In, First Out - puts job at the front of the queue
+              });
+              
+              this.logger.log(`Transaction ${transactionId} added to processing-attempt queue for later retry`);
+            } catch (queueError) {
+              this.logger.error(`Failed to add transaction ${transactionId} to processing-attempt queue: ${queueError.message}`);
+            }
             
             return cleanup();
           }
@@ -455,8 +482,22 @@ export class OfframpService {
           // Handle error responses
           if (orderDetails.status === 'error') {
             if (attempts >= maxAttempts) {
-              // Do final check before giving up
-              await this.blockchainService.verifyTransactionFinalState(chainId, orderId, transactionId);
+              // Add to processing-attempt queue for later retry
+              try {
+                await this.queueService.addToQueue("processing-attempt", {
+                  transactionId,
+                  orderId,
+                  chainId
+                }, {
+                  priority: 1,  // Highest priority
+                  lifo: true    // Last In, First Out - puts job at the front of the queue
+                });
+                
+                this.logger.log(`Transaction ${transactionId} added to processing-attempt queue due to error response`);
+              } catch (queueError) {
+                this.logger.error(`Failed to add transaction ${transactionId} to processing-attempt queue: ${queueError.message}`);
+              }
+              
               return cleanup();
             }
             return; // Try again next interval
@@ -479,11 +520,9 @@ export class OfframpService {
               orderDetails.data
             );
               
-              this.logger.log(`Order ${orderId} finalized with status ${currentStatus}`);
+            this.logger.log(`Order ${orderId} finalized with status ${currentStatus}`);
             
-            // Do final check to make sure transaction didn't revert before finishing
-            await this.blockchainService.verifyTransactionFinalState(chainId, orderId, transactionId);
-            
+            // No need for extra verification
             return cleanup();
           }
         } catch (error) {

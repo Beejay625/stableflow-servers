@@ -271,7 +271,7 @@ export class PrepareTransactionService {
         currency,
         rate: Math.round(rate * 100),
         refundAddress: transaction.businessAddress,
-        status: TransactionStatus.PENDING,
+        status: TransactionStatus.UNSETTLED,
         network,
         chain: transaction.chain,
         walletId: walletId,

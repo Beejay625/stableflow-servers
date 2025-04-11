@@ -34,6 +34,24 @@ import { Transaction } from "../wallet/entities/transaction.entity";
     BullModule.registerQueue({
       name: "transaction-dlq",
     }),
+    BullModule.registerQueue({
+      name: "processing-attempt",
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 60000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    }),
+    BullModule.registerQueue({
+      name: "failed-recovery",
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 120000 },
+        removeOnComplete: true,
+        removeOnFail: false,
+      },
+    }),
     TypeOrmModule.forFeature([Transaction]),
   ],
   providers: [QueueService],
