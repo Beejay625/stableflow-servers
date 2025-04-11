@@ -6,7 +6,7 @@ import { Repository } from "typeorm";
 import { Transaction } from "../../wallet/entities/transaction.entity";
 import { MailService } from "../../../common/utils/email";
 import { PrepareTransactionService } from "../preparetransaction.service";
-import { OfframpService } from "../offramp.service";
+import { OfframpService } from "../services/offramp.service";
 import { TransactionStatus } from "../../wallet/constants/status.enum";
 import { RedisService } from "../../redis/redis.service";
 
@@ -62,7 +62,6 @@ export class OfframpProcessor {
       // Check if transaction is still in UNSETTLED state
       if (transaction.status !== TransactionStatus.UNSETTLED) {
         this.logger.warn(`Transaction ${transactionId} is not in UNSETTLED state (${transaction.status}), skipping`);
-        await this.redisService.del(`tx:${transactionId}`);
         return { success: false, error: "Transaction not in UNSETTLED state" };
       }
 
@@ -77,12 +76,10 @@ export class OfframpProcessor {
         await this.offrampService.processOrder(preparedTransaction);
 
       if (result.status !== TransactionStatus.UNSETTLED) {
-        // Remove from Redis queue on success
-        await this.redisService.del(`tx:${transactionId}`);
         this.logger.log(`Successfully processed offramp for transaction ${transactionId}`);
         return { success: true };
       } else {
-        // If still UNSETTLED, check for terminal errors
+        // If still UNSETTLED, handle the error
         const updatedTransaction = await this.transactionRepository.findOne({
           where: { transactionId },
         });
@@ -90,13 +87,7 @@ export class OfframpProcessor {
           updatedTransaction?.metadata?.offramp?.errors?.[0]?.message ||
           "Unknown error during offramp";
 
-        // For non-terminal errors, keep in queue and retry
-        if (!updatedTransaction?.metadata?.offramp?.errors?.[0]?.isTerminal) {
-          this.logger.warn(`Non-terminal error for transaction ${transactionId}, will retry: ${errorMessage}`);
-          throw new Error(errorMessage); // This will trigger Bull's retry mechanism
-        }
-
-        // For terminal errors, update status and send alert
+        // Update status and send alert for errors
         await this.transactionRepository.update(
           { transactionId },
           {
@@ -112,10 +103,7 @@ export class OfframpProcessor {
           },
         );
 
-        // Remove from Redis queue
-        await this.redisService.del(`tx:${transactionId}`);
-
-        // Send alert for terminal errors
+        // Send alert for errors
         await this.mailService.sendMail(
           "dev-alerts@stableflow.com",
           "CRITICAL: Offramp Processing Failure",
@@ -129,8 +117,8 @@ export class OfframpProcessor {
     } catch (error) {
       this.logger.error(`Error processing offramp for transaction ${transactionId}: ${error.message}`);
       
-      // Let Bull handle the retry
-      throw error;
+      // Return error information without retrying
+      return { success: false, error: error.message };
     }
   }
 }

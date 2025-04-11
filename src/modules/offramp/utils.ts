@@ -68,6 +68,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         symbol: "USDC",
         decimals: 6,
         address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        rpcUrl: "https://mainnet.base.org",
+        chainId: 8453
       },
     ],
     "Base Sepolia": [
@@ -76,12 +78,16 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         symbol: "USDC",
         decimals: 6,
         address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        rpcUrl: "https://sepolia.base.org",
+        chainId: 84532
       },
       {
         name: "Dai",
         symbol: "DAI",
         decimals: 18,
         address: "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9",
+        rpcUrl: "https://sepolia.base.org",
+        chainId: 84532
       },
     ],
     "BNB Smart Chain": [
@@ -90,6 +96,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         symbol: "USDT",
         decimals: 18,
         address: "0x55d398326f99059fF775485246999027B3197955",
+        rpcUrl: "https://bsc-dataseed.binance.org",
+        chainId: 56
       },
     ],
     "BNB Smart Chain Testnet": [
@@ -98,6 +106,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         symbol: "USDT",
         decimals: 18,
         address: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
+        rpcUrl: "https://data-seed-prebsc-1-s1.binance.org:8545",
+        chainId: 97
       },
     ],
   };

@@ -123,8 +123,10 @@ export class PrepareTransactionService {
       }
 
       const tokenDecimals = tokenInfo.decimals;
+      const rpcUrl = tokenInfo.rpcUrl;
+      const chainId = tokenInfo.chainId;
       this.logger.log(
-        `Using token decimals: ${tokenDecimals} for ${transaction.token}`,
+        `Using token decimals: ${tokenDecimals} for ${transaction.token}, rpcUrl: ${rpcUrl}, chainId: ${chainId}`,
       );
 
       // Step 6: Get token rate from Paycrest service - always use NGN as fiat
@@ -215,6 +217,8 @@ export class PrepareTransactionService {
         chain: transaction.chain,
         walletId: transaction.walletId,
         addressId: transaction.addressId,
+        rpcUrl: rpcUrl, // Include RPC URL
+        chainId: chainId, // Include Chain ID
         memo: `Offramp for transaction ${transaction.transactionId}`,
       };
     } catch (error) {

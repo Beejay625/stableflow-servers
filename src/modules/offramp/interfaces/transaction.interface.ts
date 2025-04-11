@@ -19,6 +19,8 @@ export interface Transaction {
   chain: string;
   walletId?: string;
   addressId?: string;
+  rpcUrl?: string;
+  chainId?: number;
 }
 
 export interface Token {
@@ -26,6 +28,8 @@ export interface Token {
   symbol: string;
   decimals: number;
   address: string;
+  rpcUrl?: string;
+  chainId?: number;
 }
 
 interface TransactionPreviewProps {

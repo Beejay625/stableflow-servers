@@ -120,6 +120,8 @@ export default () => ({
   paycrest: {
     apiKey: process.env.PAYCREST_API,
     baseUrl: process.env.PAYCREST_BASE_URL,
+    senderFeeRecipient: process.env.SENDER_FEE_RECIPIENT,
+    senderFeeAmount: process.env.SENDER_FEE_AMOUNT,
   },
 
   // BEP20 USDT configuration

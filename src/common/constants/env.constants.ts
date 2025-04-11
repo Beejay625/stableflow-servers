@@ -49,3 +49,9 @@ export const BEP20_USDT_WALLET_ID = "BEP20_USDT_WALLET_ID";
 // USDC BASE environment variables
 export const USDC_BASE_API_KEY = "USDC_BASE_API_KEY";
 export const USDC_BASE_WALLET_ID = "USDC_BASE_WALLET_ID";
+
+// Sender fee recipient
+export const SENDER_FEE_RECIPIENT = "SENDER_FEE_RECIPIENT";
+
+// Sender fee amount
+export const SENDER_FEE_AMOUNT = "SENDER_FEE_AMOUNT";
