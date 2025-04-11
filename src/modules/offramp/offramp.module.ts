@@ -47,6 +47,7 @@ import { TransactionManagerService } from "./services/transaction-manager.servic
     BlockchainService,
     OfframpApiService,
     TransactionManagerService,
+    WalletConfigService,
   ],
 })
 export class OfframpModule {}

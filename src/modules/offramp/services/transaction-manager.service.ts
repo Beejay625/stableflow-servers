@@ -46,17 +46,28 @@ export class TransactionManagerService {
     accountIdentifier: string,
     recipientName: string,
     currency: string,
-    metadata: any
+    metadata: any,
+    failureReason?: string
   }): Promise<OfframpTransaction> {
-    // First check if a record already exists for this transaction
-    let offrampTransaction = await this.offrampTransactionRepository.findOne({
+    // Find the transaction record by its transaction ID
+    const transaction = await this.transactionRepository.findOne({
       where: { transactionId: transactionData.transactionId }
+    });
+    
+    if (!transaction) {
+      throw new Error(`Cannot find main transaction with transactionId: ${transactionData.transactionId}`);
+    }
+    
+    // First check if an offramp record already exists for this transaction's database ID
+    let offrampTransaction = await this.offrampTransactionRepository.findOne({
+      where: { transactionId: transaction.id }
     });
 
     if (!offrampTransaction) {
       // Create new offramp transaction record
       offrampTransaction = this.offrampTransactionRepository.create({
-        transactionId: transactionData.transactionId,
+        transactionId: transaction.id, // Use the database ID for FK
+        originalTransactionId: transactionData.transactionId, // Store the original transactionId
         offrampTransactionId: transactionData.offrampTransactionId,
         offrampId: transactionData.offrampId,
         transactionHash: transactionData.txHash,
@@ -69,6 +80,7 @@ export class TransactionManagerService {
         chainId: transactionData.chainId,
         rate: transactionData.rate,
         status: transactionData.status,
+        failureReason: transactionData.failureReason,
         recipientBank: transactionData.institution,
         recipientAccount: transactionData.accountIdentifier,
         recipientName: transactionData.recipientName,
@@ -77,7 +89,7 @@ export class TransactionManagerService {
       });
       
       await this.offrampTransactionRepository.save(offrampTransaction);
-      this.logger.log(`Created new OfframpTransaction record for transaction ${transactionData.transactionId}`);
+      this.logger.log(`Created new OfframpTransaction record for transaction ${transactionData.transactionId} (DB ID: ${transaction.id})`);
     } else {
       // Update existing offramp transaction record
       await this.offrampTransactionRepository.update(
@@ -87,6 +99,7 @@ export class TransactionManagerService {
           offrampId: transactionData.offrampId,
           transactionHash: transactionData.txHash,
           status: transactionData.status,
+          failureReason: transactionData.failureReason,
           metadata: transactionData.metadata
         }
       );
@@ -104,7 +117,7 @@ export class TransactionManagerService {
   /**
    * Update transaction metadata with blockchain related information
    * 
-   * @param transactionId Transaction ID
+   * @param transactionId Transaction ID (the business identifier, not the database primary key)
    * @param txHash Transaction hash
    * @param offrampId Offramp order ID
    * @param offrampTransactionId Offramp transaction ID
@@ -116,12 +129,13 @@ export class TransactionManagerService {
     offrampId: string,
     offrampTransactionId: string
   ): Promise<any> {
+    // Find by transactionId field (business identifier) not by id (primary key)
     const existingTransaction = await this.transactionRepository.findOne({ 
-      where: { id: transactionId } 
+      where: { transactionId: transactionId } 
     });
     
     if (!existingTransaction) {
-      this.logger.warn(`Transaction ${transactionId} not found for metadata update`);
+      this.logger.warn(`Transaction with business ID ${transactionId} not found for metadata update`);
       return null;
     }
     
@@ -142,9 +156,9 @@ export class TransactionManagerService {
       }
     };
     
-    // Update the transaction
+    // Update the transaction using its primary key (id)
     await this.transactionRepository.update(
-      { id: transactionId },
+      { id: existingTransaction.id },
       { metadata: updatedMetadata }
     );
     
@@ -156,7 +170,7 @@ export class TransactionManagerService {
    * Update transaction and offramp transaction status to a final state
    * Uses a database transaction to ensure atomicity
    * 
-   * @param transactionId Transaction ID
+   * @param transactionId Transaction ID (the business identifier, not the primary key)
    * @param status Status to set (SETTLED, REFUNDED, etc.)
    * @param orderDetails Order details from API
    * @param metadata Additional metadata
@@ -167,13 +181,13 @@ export class TransactionManagerService {
     orderDetails: any,
     metadata: any = {}
   ): Promise<void> {
-    // Get existing transaction data
+    // Get existing transaction data by its business ID
     const existingTransaction = await this.transactionRepository.findOne({ 
-      where: { id: transactionId } 
+      where: { transactionId } 
     });
     
     if (!existingTransaction) {
-      this.logger.warn(`Cannot update status: Transaction ${transactionId} not found`);
+      this.logger.warn(`Cannot update status: Transaction with business ID ${transactionId} not found`);
       return;
     }
     
@@ -184,7 +198,7 @@ export class TransactionManagerService {
       // Update main transaction
       await manager.update(
         'transactions',
-        { id: transactionId },
+        { id: existingTransaction.id }, // Use the primary key for the update
         { 
           status,
           metadata: {
@@ -200,9 +214,9 @@ export class TransactionManagerService {
         }
       );
       
-      // Update offramp transaction record
+      // Update offramp transaction record using the primary key of the main transaction
       const offrampTransaction = await this.offrampTransactionRepository.findOne({
-        where: { transactionId }
+        where: { transactionId: existingTransaction.id } // Find by foreign key reference
       });
       
       if (offrampTransaction) {
@@ -228,40 +242,69 @@ export class TransactionManagerService {
   /**
    * Update transaction with error metadata
    * 
-   * @param transactionId Transaction ID
+   * @param transactionId The business identifier of the transaction (UUID)
    * @param error Error object
+   * @param failureReason Optional reason for failure
+   * @returns Updated metadata
    */
-  async updateTransactionWithError(transactionId: string, error: Error): Promise<void> {
-    const existingTransaction = await this.transactionRepository.findOne({ 
-      where: { id: transactionId } 
-    });
-    
-    if (!existingTransaction) {
-      this.logger.warn(`Transaction ${transactionId} not found for error update`);
-      return;
-    }
-    
-    const currentMetadata = existingTransaction.metadata || {};
-    const updatedMetadata = {
-      ...currentMetadata,
-      offramp: {
-        ...(currentMetadata.offramp || {}),
-        errors: [
-          ...(currentMetadata.offramp?.errors || []),
-          {
-            time: new Date().toISOString(),
-            message: error.message,
-            stack: error.stack
-          }
-        ]
+  async updateTransactionWithError(
+    transactionId: string, 
+    error: any,
+    failureReason?: string
+  ): Promise<any> {
+    try {
+      const existingTransaction = await this.transactionRepository.findOne({
+        where: { transactionId: transactionId }
+      });
+      
+      if (!existingTransaction) {
+        this.logger.warn(`Transaction ${transactionId} not found for error update`);
+        return null;
       }
-    };
-    
-    await this.transactionRepository.update(
-      { id: transactionId },
-      { metadata: updatedMetadata }
-    );
-    
-    this.logger.log(`Updated error information for transaction ${transactionId}`);
+      
+      const currentMetadata = existingTransaction?.metadata || {};
+      const updatedMetadata = {
+        ...currentMetadata,
+        offramp: {
+          ...(currentMetadata.offramp || {}),
+          error: error.message || String(error),
+          errorTimestamp: new Date().toISOString(),
+          failureReason: failureReason
+        }
+      };
+      
+      await this.transactionRepository.update(
+        { id: existingTransaction.id },
+        { 
+          metadata: updatedMetadata,
+          status: TransactionStatus.FAILED
+        }
+      );
+      
+      // Also update the offramp transaction record if it exists
+      const offrampTransaction = await this.offrampTransactionRepository.findOne({
+        where: { transactionId: existingTransaction.id }
+      });
+      
+      if (offrampTransaction) {
+        await this.offrampTransactionRepository.update(
+          { id: offrampTransaction.id },
+          {
+            status: TransactionStatus.FAILED,
+            failureReason: failureReason,
+            metadata: {
+              ...(offrampTransaction.metadata || {}),
+              error: error.message || String(error),
+              errorTimestamp: new Date().toISOString()
+            }
+          }
+        );
+      }
+      
+      return updatedMetadata;
+    } catch (dbError) {
+      this.logger.error(`Error updating transaction with error: ${dbError.message}`);
+      return null;
+    }
   }
 } 

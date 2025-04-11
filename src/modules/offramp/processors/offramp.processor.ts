@@ -65,60 +65,68 @@ export class OfframpProcessor {
         return { success: false, error: "Transaction not in UNSETTLED state" };
       }
 
-      // Prepare transaction for offramp
-      const preparedTransaction =
-        await this.prepareTransactionService.prepareTransactionForOfframp(
-          transactionId,
-        );
+      // Process the offramp using the transaction ID
+      // processOrder will handle preparation internally
+      const result = 
+        await this.offrampService.processOrder(transactionId);
 
-      // Process the offramp
-      const result =
-        await this.offrampService.processOrder(preparedTransaction);
-
-      if (result.status !== TransactionStatus.UNSETTLED) {
-        this.logger.log(`Successfully processed offramp for transaction ${transactionId}`);
-        return { success: true };
+      if (result.status !== TransactionStatus.FAILED) {
+        this.logger.log(`Successfully initiated offramp processing for transaction ${transactionId}, status: ${result.status}`);
+        // Remove from Redis queue only if processing initiated successfully (not FAILED immediately)
+        await this.redisService.del(`tx:${transactionId}`);
+        return { success: true, status: result.status };
       } else {
-        // If still UNSETTLED, handle the error
+        // If processOrder returned FAILED immediately, handle the error
         const updatedTransaction = await this.transactionRepository.findOne({
           where: { transactionId },
         });
         const errorMessage =
-          updatedTransaction?.metadata?.offramp?.errors?.[0]?.message ||
+          updatedTransaction?.metadata?.offramp?.failureReason ||
           "Unknown error during offramp";
+        
+        this.logger.error(`Offramp processing failed immediately for ${transactionId}: ${errorMessage}`);
 
-        // Update status and send alert for errors
+        // Send alert for immediate failures
+        await this.mailService.sendMail(
+          "dev-alerts@stableflow.com",
+          "CRITICAL: Offramp Processing Immediate Failure",
+          {
+            text: `Transaction ${transactionId} failed offramp processing immediately.\nReason: ${errorMessage}`,
+          },
+        );
+
+        // Remove from Redis queue even on immediate failure to prevent retries
+        await this.redisService.del(`tx:${transactionId}`);
+        return { success: false, error: errorMessage };
+      }
+    } catch (error) {
+      this.logger.error(`Unhandled error processing offramp for transaction ${transactionId}: ${error.message}`, error.stack);
+      
+      // Attempt to update the transaction as failed with a generic error
+      try {
         await this.transactionRepository.update(
           { transactionId },
           {
             status: TransactionStatus.FAILED,
             metadata: {
-              ...updatedTransaction?.metadata,
+              ...(await this.transactionRepository.findOne({ where: { transactionId } })).metadata,
               offramp: {
-                ...updatedTransaction?.metadata?.offramp,
-                finalError: errorMessage,
+                ...(await this.transactionRepository.findOne({ where: { transactionId } })).metadata?.offramp,
+                failureReason: "Unhandled processor error",
+                error: error.message,
                 failedAt: new Date().toISOString(),
               },
             },
           },
         );
-
-        // Send alert for errors
-        await this.mailService.sendMail(
-          "dev-alerts@stableflow.com",
-          "CRITICAL: Offramp Processing Failure",
-          {
-            text: `Transaction ${transactionId} failed offramp processing.\nError: ${errorMessage}`,
-          },
-        );
-
-        return { success: false, error: errorMessage };
+      } catch (dbError) {
+        this.logger.error(`Failed to update transaction ${transactionId} status after unhandled processor error: ${dbError.message}`);
       }
-    } catch (error) {
-      this.logger.error(`Error processing offramp for transaction ${transactionId}: ${error.message}`);
       
+      // Remove from Redis queue on unhandled error
+      await this.redisService.del(`tx:${transactionId}`);
       // Return error information without retrying
-      return { success: false, error: error.message };
+      return { success: false, error: `Unhandled processor error: ${error.message}` };
     }
   }
 }

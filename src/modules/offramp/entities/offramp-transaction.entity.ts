@@ -25,6 +25,10 @@ export class OfframpTransaction {
 
   @Column({ nullable: true })
   @Index()
+  originalTransactionId: string;  // Stores the transactionId value from the transactions table
+
+  @Column({ nullable: true })
+  @Index()
   offrampTransactionId: string;  // ID from the offramp API response
 
   @Column({ nullable: true })
@@ -60,6 +64,9 @@ export class OfframpTransaction {
 
   @Column({ nullable: true })
   status: string;  // Processing status of the offramp
+
+  @Column({ nullable: true })
+  failureReason: string;  // Reason for transaction failure
 
   @Column({ nullable: true })
   recipientBank: string;  // Recipient's bank code

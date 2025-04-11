@@ -19,19 +19,18 @@ export class WalletConfigService {
 
   /**
    * Get the appropriate wallet configuration from environment variables
-   * based on the blockchain and wallet information from the webhook.
+   * based on the blockchain and token information.
    *
-   * @param payload The webhook payload from Blockradar
+   * @param payload Contains blockchain and token information
    * @returns The wallet configuration to use for API calls
    */
   getWalletConfig(payload: any): WalletConfigData {
     // Extract blockchain and wallet information from payload
     const blockchainName = payload?.data?.blockchain?.name?.toLowerCase() || "";
-    const walletId = payload?.data?.wallet?.id || "";
     const tokenSymbol = payload?.data?.asset?.symbol?.toUpperCase() || "";
 
     this.logger.debug(
-      `Extracting wallet config for blockchain: ${blockchainName}, token: ${tokenSymbol}, walletId: ${walletId}`,
+      `Extracting wallet config for blockchain: ${blockchainName}, token: ${tokenSymbol}`,
     );
 
     // Determine wallet name based on blockchain and token
@@ -67,39 +66,34 @@ export class WalletConfigService {
       };
     }
 
-    // Verify payload wallet ID matches config wallet ID
-    if (walletId && config.walletId && walletId !== config.walletId) {
-      this.logger.warn(
-        `Wallet ID mismatch: ${walletId} (payload) vs ${config.walletId} (config), using payload wallet ID`,
-      );
-    }
-
+    // Always use wallet ID from configuration, ignore payload wallet ID
     return {
       apiKey: config.apiKey,
-      walletId: walletId || config.walletId, // Prefer payload wallet ID if available
+      walletId: config.walletId,
       walletName,
     };
   }
 
   /**
    * Gets the correct wallet configuration for a specific transaction ID
-   * Uses the existing TransactionData from getTransactionDetails if available
+   * Uses blockchain and token information to determine the correct wallet config from environment
    *
-   * @param transactionData Transaction data to get configuration for
+   * @param transactionData Transaction data with blockchain and token info
    * @returns The wallet configuration to use for API calls
    */
   getWalletConfigForTransaction(transactionData: any): WalletConfigData {
     // Extract blockchain and token information from transaction data
     const blockchainName = transactionData?.blockchainName?.toLowerCase() || "";
     const tokenSymbol = transactionData?.tokenSymbol?.toUpperCase() || "";
-    const walletId = transactionData?.walletId || "";
-
+    
+    // Don't use walletId from transaction, only use the environment config
+    
     // Mock payload structure to reuse existing function
     const payload = {
       data: {
         blockchain: { name: blockchainName },
         asset: { symbol: tokenSymbol },
-        wallet: { id: walletId },
+        wallet: { id: "" }, // Empty ID to ensure we use the config value
       },
     };
 

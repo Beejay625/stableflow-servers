@@ -87,7 +87,7 @@ export class OfframpService {
     this.logger.log(`Waiting for transaction ${txId} to be confirmed...`);
     
     const maxAttempts = 10;
-    const pollingInterval = 2000; // 3 seconds
+    const pollingInterval = 3000; // 3 seconds
     
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -121,126 +121,83 @@ export class OfframpService {
   }
 
   /**
-   * Creates an offramp order for converting cryptocurrency to fiat.
+   * Creates an offramp order using pre-prepared transaction data.
    * 
-   * Direct Processing Flow:
-   * 1. Prepares transaction data with recipient details
-   * 2. Validates transaction data and network support
-   * 3. Approves token spending (ERC20 approve)
-   * 4. Creates the order on the gateway contract
-   * 
-   * @param transactionId - The ID of the transaction to process
-   * @returns Object containing: 
-   *   - originalTransactionId: Original transaction ID used to create the order
-   *   - offrampTransactionId: Transaction ID from API response
-   *   - hash: Transaction hash from API response
-   *   - offrampId: Blockchain order ID extracted from logs
-   * @throws Error if transaction data is invalid or network unsupported
+   * @param transaction - The fully prepared Transaction object
+   * @returns Object containing details needed for processing
+   * @throws Error if validation fails or contract interaction errors occur
    */
-  async createOrder(transactionId: string): Promise<{ 
+  async createOrder(transaction: Transaction): Promise<{
     originalTransactionId: string;
-    offrampTransactionId: string; 
-    hash: string; 
-    offrampId?: string 
+    offrampTransactionId: string;
+    hash: string;
+    offrampId?: string;
   }> {
+    const transactionId = transaction.id; // Get original ID for context
     try {
-      this.logger.log(`Creating offramp order for transaction: ${transactionId}`);
+      this.logger.log(`Creating offramp order for prepared transaction: ${transactionId}`);
 
-      // Get prepared transaction data
-      const transaction = await this.prepareTransactionService.prepareTransactionForOfframp(transactionId);
-      
-      // Use the network from the prepared transaction
+      // Step 1: Basic validations on prepared data
       const transactionNetwork = transaction.network;
-
-      // Get the gateway address for the transaction's network
       const gatewayAddress = getGatewayAddressForNetwork(transactionNetwork);
-      
-      // Fetch supported tokens for the transaction's network
-      const supportedTokens = fetchSupportedTokens(transactionNetwork);
-      if (!supportedTokens) {
-        const errorMsg = `Unsupported network: ${transactionNetwork}`;
-        this.logger.error(errorMsg);
-        throw new Error(errorMsg);
+      if (!transaction.addressId || !transaction.walletId) {
+        throw new Error(`Missing critical wallet info (addressId/walletId) for transaction ${transactionId}`);
+      }
+      if (!transaction.amountInTokenUnits || !transaction.encryptedRecipient) {
+        throw new Error(`Prepared transaction data missing required fields for ${transactionId}`);
+      }
+      if (!transaction.rate || transaction.rate <= 0) {
+        throw new Error(`Invalid rate in prepared transaction: ${transaction.rate}`);
       }
 
-      // Get wallet config for the transaction based on blockchain and token
+      // Step 2: Get wallet config
       const walletConfig = this.walletConfigService.getWalletConfigForTransaction({
         blockchainName: transaction.chain,
         tokenSymbol: transaction.tokenSymbol,
         walletId: transaction.walletId
       });
-      
-      // Ensure we have a valid addressId
-      if (!transaction.addressId) {
-        this.logger.error(`Missing addressId for transaction ${transactionId}`);
-        throw new Error(`Missing addressId for transaction ${transactionId}`);
-      }
 
-      // Step 1: Approve token spending and get transaction hash
-      this.logger.log(`Step 1: Approving token spending for transaction: ${transactionId}`);
+      // Step 3: Approve token spending
+      this.logger.log(`Step 3: Approving token spending for transaction: ${transactionId}`);
       const approvalTx = await this.orderService.approveTokenSpending(
         transaction.tokenAddress,
         gatewayAddress,
-        transaction.amount.toString(),
+        transaction.amountInTokenUnits, // Use pre-calculated amount
         transaction.senderAddress,
         walletConfig,
         transaction.addressId
       );
-      
-      this.logger.log(`Token approval completed: ${approvalTx.txId || 'existing-allowance'}`);
+      this.logger.log(`Token approval response: ${approvalTx.txId || 'existing-allowance'}`);
 
-      // If we have a new approval transaction, wait for it to be confirmed
+       // Check if the approval call itself returned an error
+      if (approvalTx.error) {
+        throw new Error(`Token approval failed: ${approvalTx.error}`);
+      }
+
+      // Step 4: Wait for approval confirmation if needed
       if (approvalTx.txId) {
-        this.logger.log(`Waiting for approval transaction to be confirmed...`);
-        await this.waitForTransactionConfirmation(
+        this.logger.log(`Waiting for approval transaction ${approvalTx.txId} to be confirmed...`);
+        const approvalHash = await this.waitForTransactionConfirmation(
           walletConfig.walletId, 
           approvalTx.txId, 
           walletConfig.apiKey
         );
-      }
-
-      // Step 2: Wait for approval to be processed
-      this.logger.log(`Waiting for approval to be processed before creating order...`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Step 3: Prepare and encrypt recipient data
-      this.logger.log(`Step 3: Preparing encrypted recipient data`);
-      const encryptedRecipient = await this.offrampApiService.prepareEncryptedRecipientData(
-        transaction.accountIdentifier,
-        transaction.recipientName,
-        transaction.institution,
-        transaction.currency,
-        transaction.memo || ''
-      );
-
-      // Step 4: Create the order
-      this.logger.log(`Step 4: Creating gateway order for transaction: ${transactionId}`);
-      
-      // Validate token information is available
-      if (!transaction.tokenDecimals) {
-        throw new Error(`Missing token decimal information for ${transaction.token}`);
+        if (approvalHash === 'pending-hash') {
+          throw new Error(`Approval transaction ${approvalTx.txId} confirmation timed out`);
+        }
+        this.logger.log(`Approval confirmed with hash: ${approvalHash}. Waiting for processing...`);
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Short delay
       }
       
-      // Convert the amount to proper token units
-      let amountInTokenUnits: string;
-      try {
-        amountInTokenUnits = parseUnits(transaction.amount.toString(), transaction.tokenDecimals).toString();
-      } catch (conversionError) {
-        this.logger.error(`Error converting amount to token units: ${conversionError.message}`);
-        throw new Error(`Failed to convert amount: ${conversionError.message}`);
-      }
-      
-      // Validate the rate from the transaction
-      if (!transaction.rate || transaction.rate <= 0) {
-        throw new Error(`Invalid rate: ${transaction.rate}. Rate must be greater than 0.`);
-      }
-      
+      // Step 5: Create the order using prepared data
+      this.logger.log(`Step 5: Creating gateway order for transaction: ${transactionId}`);
       const rate = transaction.rate.toString();
-      
-      // Set fee recipient and fee amount
       const senderFeeRecipient = this.configService.get<string>(SENDER_FEE_RECIPIENT);
       const senderFee = this.configService.get<string>(SENDER_FEE_AMOUNT);
       
+      let offrampApiTxId: string;
+      let orderTxHash: string;
+
       try {
         // Execute the order creation transaction
         const txResponse = await customSmartContractWrite({
@@ -252,184 +209,189 @@ export class OfframpService {
           method: "createOrder",
           parameters: [
             transaction.tokenAddress,
-            amountInTokenUnits,
+            transaction.amountInTokenUnits, // Use pre-calculated amount
             rate,
             senderFeeRecipient,
             senderFee ? BigInt(senderFee).toString() : "0",
             transaction.refundAddress,
-            encryptedRecipient
+            transaction.encryptedRecipient // Use pre-calculated encrypted data
           ],
         });
         
-        // Extract transaction ID from response
-        const txId = txResponse?.data?.id;
-        
-        if (!txId) {
-          throw new Error('Order creation transaction ID not returned from API');
+        offrampApiTxId = txResponse?.data?.id;
+        if (!offrampApiTxId) {
+          throw new Error('Order creation transaction ID not returned from BlockRadar API');
         }
+        this.logger.log(`Order creation initiated with BlockRadar Tx ID: ${offrampApiTxId}, waiting for confirmation...`);
         
-        this.logger.log(`Order creation initiated with transaction ID: ${txId}, waiting for confirmation...`);
-        
-        // Poll for the confirmed transaction hash for the order creation transaction
-        const txHash = await this.waitForTransactionConfirmation(
+        // Step 6: Wait for order creation confirmation
+        orderTxHash = await this.waitForTransactionConfirmation(
           walletConfig.walletId, 
-          txId, 
+          offrampApiTxId, 
           walletConfig.apiKey
         );
         
-        this.logger.log(`Order creation transaction confirmed with hash: ${txHash}`);
-        
-        // Try to get the orderId from transaction logs if we have RPC URL and transaction hash
-        let blockchainOrderId = null;
-        if (transaction.rpcUrl && txHash && txHash !== 'pending-hash') {
-          try {
-            this.logger.log(`Attempting to extract logs from order creation transaction ${txHash}`);
-            const orderLogs = await this.blockchainService.extractOrderLogsFromTransaction(
-              txHash, 
-              transaction.rpcUrl,
-              transactionId  // Pass the original transaction ID for database updates
-            );
-            
-            if (orderLogs && orderLogs.orderId) {
-              this.logger.log(`Found offrampId ${orderLogs.orderId} from transaction logs`);
-              blockchainOrderId = orderLogs.orderId;
-            } else {
-              this.logger.warn(`No order ID found in logs for transaction ${txHash}`);
-            }
-          } catch (logError) {
-            this.logger.warn(`Failed to extract order logs: ${logError.message}`);
-            // Continue with the process even if log extraction fails
-          }
+        if (orderTxHash === 'pending-hash') {
+          throw new Error(`Order creation transaction ${offrampApiTxId} confirmation timed out`);
         }
-        
-        return {
-          originalTransactionId: transactionId,  // Original transaction ID
-          offrampTransactionId: txId,  // API response ID
-          hash: txHash,  // Transaction hash
-          offrampId: blockchainOrderId  // Blockchain order ID from logs
-        };
+        this.logger.log(`Order creation transaction confirmed with hash: ${orderTxHash}`);
+
       } catch (error) {
-        this.logger.error(`Order creation failed for transaction ${transactionId}: ${error.message}`);
-        throw error;
+        this.logger.error(`Gateway order creation failed for transaction ${transactionId}: ${error.message}`);
+        // Ensure specific error is thrown for processOrder to catch
+        throw new Error(`Gateway order creation failed: ${error.message}`);
       }
+        
+      // Step 7: Extract Order ID from logs (best effort)
+      let blockchainOrderId = null;
+      if (transaction.rpcUrl && orderTxHash) { // No need to check for 'pending-hash' here
+        try {
+          this.logger.log(`Attempting to extract Order ID from transaction ${orderTxHash}`);
+          blockchainOrderId = await this.blockchainService.getOrderIdFromTransaction(
+            orderTxHash, 
+            transaction.rpcUrl,
+            transactionId // Pass original ID for DB updates
+          );
+          this.logger.log(blockchainOrderId ? `Found Order ID ${blockchainOrderId}` : `Order ID not found in logs yet`);
+        } catch (logError) {
+          this.logger.warn(`Failed to extract order logs: ${logError.message}`);
+          // Do not throw, log extraction failure is not critical path failure here
+        }
+      }
+      
+      return {
+        originalTransactionId: transactionId,
+        offrampTransactionId: offrampApiTxId, // BlockRadar Tx ID for order creation
+        hash: orderTxHash,                  // Blockchain hash for order creation
+        offrampId: blockchainOrderId       // Blockchain Order ID from logs (if found)
+      };
+
     } catch (error) {
       this.logger.error(`Error creating offramp order for transaction ${transactionId}: ${error.message}`, error.stack);
+      // Rethrow the error to be handled by processOrder
       throw error;
     }
   }
 
   /**
-   * Process for creating and tracking an order end-to-end
-   * Handles the entire offramp flow directly without queues
+   * Processes an offramp order: prepares data, creates the order, updates status, and initiates polling.
    * 
-   * @param transaction Transaction to process
+   * @param transactionInput - Either a transaction ID (string) or a pre-fetched WalletTransaction entity
    * @returns Object containing transaction hash and status
    */
-  async processOrder(transaction: Transaction): Promise<{
+  async processOrder(transactionInput: string | WalletTransaction): Promise<{
     txHash: string;
     offrampId?: string;
     offrampTransactionId: string;
     status: TransactionStatus;
   }> {
-    try {
-      this.logger.log(`Starting to process offramp order for transaction ${transaction.id}`);
+    let transactionId: string;
+    let initialTransaction: WalletTransaction | null = null;
 
-      // Step 1: Create the order and get transaction hash
-      let txHash: string;
-      try {
-        this.logger.log(`Calling createOrder for transaction ${transaction.id}`);
-        const orderResult = await this.createOrder(transaction.id);
-        txHash = orderResult.hash;
-        const offrampId = orderResult.offrampId || orderResult.offrampTransactionId;
-        const offrampTransactionId = orderResult.offrampTransactionId;
-        this.logger.log(`Order successfully created with txHash: ${txHash} for transaction ${transaction.id}`);
-        
-        // Update transaction with hash information but keep as UNSETTLED
-        // Real status update will come from webhook
-        const updatedMetadata = await this.transactionManager.updateTransactionMetadataWithBlockchainInfo(
-          transaction.id,
-              txHash,
-              offrampId,
-          offrampTransactionId
-        );
-        
-        if (updatedMetadata) {
-          // Create or update the OfframpTransaction record
-          await this.transactionManager.createOrUpdateOfframpTransaction({
-              transactionId: transaction.id,
-              offrampTransactionId: offrampTransactionId,
-              offrampId: offrampId,
-            txHash: txHash,
-              tokenAddress: transaction.tokenAddress,
-              tokenSymbol: transaction.tokenSymbol,
-              amount: transaction.amount,
-              refundAddress: transaction.refundAddress,
-              network: transaction.network,
-              rpcUrl: transaction.rpcUrl,
-              chainId: transaction.chainId,
-              rate: transaction.rate,
-              // Set status based on whether we have blockchain-confirmed offrampId
-              status: offrampId ? TransactionStatus.PROCESSING : TransactionStatus.UNSETTLED,
-            institution: transaction.institution,
-            accountIdentifier: transaction.accountIdentifier,
-              recipientName: transaction.recipientName,
-              currency: transaction.currency,
-              metadata: updatedMetadata.offramp
-            });
-          
-          this.logger.log(`Successfully updated transaction ${transaction.id} metadata with txHash`);
-          
-          // If we have an offrampId and chainId, start polling for order status
-          if (offrampId && transaction.chainId) {
-            this.logger.log(`Starting order status polling for offrampId ${offrampId} on chain ${transaction.chainId}`);
-            
-            try {
-              // Start polling in background without awaiting (non-blocking)
-              this.pollOrderStatus(transaction.chainId, offrampId, transaction.id)
-                .then(() => {
-                  this.logger.log(`Completed order status polling for offrampId ${offrampId}`);
-                })
-                .catch(error => {
-                  this.logger.error(`Error in background polling for offrampId ${offrampId}: ${error.message}`);
-                });
-                
-              this.logger.log(`Order status polling initiated for offrampId ${offrampId}`);
-            } catch (pollingError) {
-              this.logger.warn(`Failed to initiate order status polling: ${pollingError.message}`);
-              // Continue with process even if polling setup fails
-            }
-          } else {
-            this.logger.warn(`Cannot start order status polling for transaction ${transaction.id} - missing offrampId or chainId`);
-          }
-        } else {
-          this.logger.warn(`Transaction ${transaction.id} not found for metadata update`);
-        }
-        
-        this.logger.log(`Order processing complete for transaction ${transaction.id}, returning UNSETTLED status`);
-        return {
-          txHash,
-          offrampId,
-          offrampTransactionId,
-          status: TransactionStatus.UNSETTLED
-        };
-      } catch (error) {
-        // This will be logged but not retried automatically - state remains UNSETTLED
-        // and will be picked up by checkStalledTransactions cron job
-        this.logger.error(`Error creating order for transaction ${transaction.id}: ${error.message}`, error.stack);
-        
-        // Update transaction metadata to record the error
-        await this.transactionManager.updateTransactionWithError(transaction.id, error);
-        
-        this.logger.log(`Order processing failed for transaction ${transaction.id}, returning error state`);
-        return {
-          txHash: 'error',
-          offrampTransactionId: 'error',
-          status: TransactionStatus.UNSETTLED
-        };
+    // Determine if input is ID or entity
+    if (typeof transactionInput === 'string') {
+      transactionId = transactionInput;
+    } else {
+      initialTransaction = transactionInput;
+      transactionId = transactionInput.transactionId; // Use transactionId (UUID), not the primary key id
+    }
+
+    this.logger.log(`Starting to process offramp order for transaction ${transactionId}`);
+
+    try {
+      // Step 1: Prepare transaction data (fetch if necessary)
+      this.logger.log(`Preparing transaction data for ${transactionId}`);
+      const preparedTransaction = await this.prepareTransactionService.prepareTransactionForOfframp(transactionId);
+      
+      // Step 2: Create or update OfframpTransaction record (initial state)
+      // We do this early to ensure the record exists before blockchain steps
+      this.logger.log(`Creating/updating initial OfframpTransaction record for ${transactionId}`);
+      
+      await this.transactionManager.createOrUpdateOfframpTransaction({
+        transactionId: transactionId, // Use the business identifier UUID, not the database ID
+        offrampTransactionId: 'pending-api-id',
+        offrampId: 'pending-blockchain-id',
+        txHash: 'pending-hash',
+        tokenAddress: preparedTransaction.tokenAddress,
+        tokenSymbol: preparedTransaction.tokenSymbol,
+        amount: preparedTransaction.amount,
+        refundAddress: preparedTransaction.refundAddress,
+        network: preparedTransaction.network,
+        rpcUrl: preparedTransaction.rpcUrl,
+        chainId: preparedTransaction.chainId,
+        rate: preparedTransaction.rate,
+        status: TransactionStatus.UNSETTLED, // Start as UNSETTLED
+        institution: preparedTransaction.institution,
+        accountIdentifier: preparedTransaction.accountIdentifier,
+        recipientName: preparedTransaction.recipientName,
+        currency: preparedTransaction.currency,
+        metadata: { stage: 'initiated' } // Initial minimal metadata
+      });
+
+      // Step 3: Create the order using prepared data
+      this.logger.log(`Proceeding to create gateway order for ${transactionId}`);
+      const orderResult = await this.createOrder(preparedTransaction);
+      
+      // Successfully created order, update records
+      this.logger.log(`Order creation successful for ${transactionId}. Hash: ${orderResult.hash}, Offramp API TxID: ${orderResult.offrampTransactionId}, Blockchain OrderID: ${orderResult.offrampId}`);
+      
+      // Step 4: Update WalletTransaction metadata with results
+      // BlockchainService handles updating OfframpTransaction status if orderId is found
+      await this.transactionManager.updateTransactionMetadataWithBlockchainInfo(
+        transactionId,
+        orderResult.hash,
+        orderResult.offrampId, // Pass potentially null orderId
+        orderResult.offrampTransactionId
+      );
+      
+      // Step 5: Initiate status polling if we have chainId and a blockchain order ID
+      // The DB update for OfframpTransaction already happened in getOrderIdFromTransaction if successful
+      if (orderResult.offrampId && preparedTransaction.chainId) {
+        this.logger.log(`Starting order status polling for offrampId ${orderResult.offrampId} on chain ${preparedTransaction.chainId}`);
+        // Start polling in background (non-blocking)
+        this.pollOrderStatus(preparedTransaction.chainId, orderResult.offrampId, transactionId)
+          .catch(pollingError => {
+            this.logger.error(`Error in background polling for offrampId ${orderResult.offrampId}: ${pollingError.message}`);
+          });
+      } else {
+        this.logger.warn(`Cannot start order status polling for transaction ${transactionId} - missing offrampId or chainId. Status remains UNSETTLED.`);
       }
+
+      // Return UNSETTLED - final status comes from webhook or polling completion
+      return {
+        txHash: orderResult.hash,
+        offrampId: orderResult.offrampId,
+        offrampTransactionId: orderResult.offrampTransactionId,
+        status: TransactionStatus.UNSETTLED 
+      };
+
     } catch (error) {
-      this.logger.error(`Unexpected error in processOrder for transaction ${transaction.id}: ${error.message}`, error.stack);
-      throw error;
+      // Catch errors from prepareTransactionForOfframp or createOrder
+      this.logger.error(`Offramp processing failed for transaction ${transactionId}: ${error.message}`, error.stack);
+      
+      // Determine failure reason based on where the error might have occurred
+      let failureReason = "failed during offramp processing";
+      if (error.message.includes("approve") || error.message.includes("approval")) {
+        failureReason = "failed in token approval";
+      } else if (error.message.includes("Gateway order creation failed")) {
+        failureReason = "failed in create order";
+      } else if (error.message.includes("prepareTransactionForOfframp")) {
+        failureReason = "failed during data preparation";
+      }
+      
+      // Update transaction status and metadata to record the failure
+      await this.transactionManager.updateTransactionWithError(
+        transactionId, 
+        error, 
+        failureReason
+      );
+      
+      // Return FAILED status
+      return {
+        txHash: 'error',
+        offrampTransactionId: 'error',
+        status: TransactionStatus.FAILED
+      };
     }
   }
 
@@ -439,7 +401,7 @@ export class OfframpService {
    * 
    * @param chainId - The blockchain chain ID 
    * @param orderId - The order ID to check
-   * @param transactionId - The ID of the original transaction
+   * @param transactionId - The business identifier of the transaction (UUID)
    * @returns Promise resolving when polling completes or errors
    */
   async pollOrderStatus(
@@ -452,7 +414,7 @@ export class OfframpService {
     
     // Get transaction data once before starting polling
     const existingTransaction = await this.transactionRepository.findOne({ 
-      where: { id: transactionId } 
+      where: { transactionId: transactionId } 
     });
     
     if (!existingTransaction) {

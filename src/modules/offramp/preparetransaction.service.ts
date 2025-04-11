@@ -2,6 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { ConfigService } from "@nestjs/config";
+import { parseUnits } from 'viem';
 
 import { Transaction as WalletTransaction } from "../wallet/entities/transaction.entity";
 import { Transaction } from "./interfaces/transaction.interface";
@@ -12,6 +13,8 @@ import {
 } from "./utils";
 import { TransactionStatus } from "../wallet/constants/status.enum";
 import { PaycrestService } from "../paycrest/paycrest.service";
+import { OfframpApiService } from './services/offramp-api.service';
+import { WalletConfigService } from "../../common/utils/wallet-config";
 
 /**
  * Service responsible for preparing transaction data for offramp processing
@@ -27,6 +30,8 @@ export class PrepareTransactionService {
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
     private readonly paycrestService: PaycrestService,
+    private readonly offrampApiService: OfframpApiService,
+    private readonly walletConfigService: WalletConfigService,
   ) {
     this.configNetwork = this.configService.get<string>("blockradar.network");
     this.logger.log(
@@ -42,7 +47,9 @@ export class PrepareTransactionService {
    * 2. Validate required bank details
    * 3. Map token symbol to blockchain address based on chain and network config
    * 4. Get token rate from Paycrest service
-   * 5. Format data for offramp processing
+   * 5. Calculate amount in token units
+   * 6. Prepare encrypted recipient data
+   * 7. Format data for offramp processing
    *
    * @param transactionId - The ID of the transaction to process
    * @returns Promise<Transaction> - Transaction details formatted for offramp
@@ -129,7 +136,35 @@ export class PrepareTransactionService {
         `Using token decimals: ${tokenDecimals} for ${transaction.token}, rpcUrl: ${rpcUrl}, chainId: ${chainId}`,
       );
 
-      // Step 6: Get token rate from Paycrest service - always use NGN as fiat
+      // Step 6: Get wallet configuration based on chain and token
+      // This is crucial for processing the transaction with the correct wallet
+      const walletConfig = this.walletConfigService.getWalletConfigForTransaction({
+        blockchainName: transaction.chain,
+        tokenSymbol: transaction.token
+        // Don't pass transaction walletId as we want to use only the config walletId
+      });
+      
+      this.logger.log(
+        `Using wallet configuration: walletName=${walletConfig.walletName}, walletId=${walletConfig.walletId} for chain=${transaction.chain}, token=${transaction.token}`,
+      );
+
+      // Use addressId from transaction (business) but walletId from config
+      const addressId = transaction.addressId;
+      const walletId = walletConfig.walletId;
+      
+      if (!addressId) {
+        throw new Error(
+          `Missing address ID for transaction ${transactionId}. This should be set in the business record.`
+        );
+      }
+      
+      if (!walletId) {
+        throw new Error(
+          `Missing wallet ID from wallet configuration for chain=${transaction.chain}, token=${transaction.token}`
+        );
+      }
+
+      // Step 7: Get token rate from Paycrest service - always use NGN as fiat
       const fiat = "NGN";
       // Ensure token symbol is uppercase for rate fetching
       const tokenSymbol = transaction.token.toUpperCase();
@@ -145,59 +180,82 @@ export class PrepareTransactionService {
 
       // Try up to 3 times to get a valid rate
       let rateResponse;
-      let retries = 0;
+      let attempts = 0;
+      const maxAttempts = 3;
       let rate = 0;
+      let currency = "NGN";
 
-      while (retries < 3) {
-        rateResponse = await this.paycrestService.getTokenRate(
-          tokenSymbol,
-          amountStr,
-          fiat,
-        );
+      while (attempts < maxAttempts) {
+        try {
+          rateResponse = await this.paycrestService.getTokenRate(
+            tokenSymbol,
+            amountStr,
+            fiat
+          );
+          this.logger.log(
+            `[DEBUG] Raw rate response: ${JSON.stringify(rateResponse)}`,
+          );
 
-        this.logger.log(
-          `[DEBUG] Raw rate response: ${JSON.stringify(rateResponse)}`,
-        );
-
-        // Handle case where data is the rate itself (as string)
-        if (rateResponse.status === "success") {
-          if (typeof rateResponse.data === "string") {
+          if (
+            rateResponse &&
+            rateResponse.status === "success" &&
+            rateResponse.data
+          ) {
             rate = parseFloat(rateResponse.data);
-          } else if (rateResponse.data && rateResponse.data.rate) {
-            // Handle case where data is an object with rate property
-            rate = parseFloat(rateResponse.data.rate);
-          }
-
-          if (rate > 0) {
+            if (isNaN(rate) || rate <= 0) {
+              this.logger.warn(`Invalid rate value: ${rateResponse.data}`);
+              attempts++;
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+              continue;
+            }
             this.logger.log(
               `Received valid rate: ${rate} for ${tokenSymbol}/${fiat}`,
             );
             break;
+          } else {
+            this.logger.warn(
+              `Invalid rate response: ${JSON.stringify(rateResponse)}`,
+            );
+            attempts++;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
           }
-        }
-
-        retries++;
-        this.logger.warn(
-          `Attempt ${retries}: Failed to get valid rate for ${tokenSymbol}/${fiat}, received: ${JSON.stringify(rateResponse)}`,
-        );
-
-        // Wait a short time before retrying
-        if (retries < 3) {
+        } catch (rateError) {
+          this.logger.error(
+            `Error fetching rate (attempt ${attempts + 1}/${maxAttempts}): ${
+              rateError.message
+            }`,
+          );
+          attempts++;
+          if (attempts >= maxAttempts) {
+            throw new Error(`Failed to get valid rate after ${maxAttempts} attempts: ${rateError.message}`);
+          }
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
-      // If we still don't have a valid rate after retries, throw an error
-      if (rate <= 0) {
-        throw new Error(
-          `Failed to get valid exchange rate for ${tokenSymbol}/${fiat} after ${retries} attempts`,
-        );
+      // Step 8: Calculate token amount in smallest units (e.g., wei for ETH) using decimals
+      let amountInTokenUnits: string;
+      try {
+        // The transaction.tokenAmount is in display units (e.g., 0.1 USDC)
+        // We need to convert it to smallest units (e.g., 100000 for 0.1 USDC with 6 decimals)
+        this.logger.log(`Converting amount ${transaction.tokenAmount} to token units with ${tokenDecimals} decimals`);
+        amountInTokenUnits = parseUnits(transaction.tokenAmount.toString(), tokenDecimals).toString();
+        this.logger.log(`Converted amount: ${amountInTokenUnits} (in smallest units)`);
+      } catch (conversionError) {
+        this.logger.error(`Error converting amount to token units: ${conversionError.message}`);
+        throw new Error(`Failed to convert amount: ${conversionError.message}`);
       }
+      
+      // Step 9: Prepare encrypted recipient data
+      const encryptedRecipient = await this.offrampApiService.prepareEncryptedRecipientData(
+        bankDetails.accountNumber,
+        bankDetails.accountName,
+        bankDetails.bankCode,
+        currency,
+        `Offramp for transaction ${transaction.transactionId}` // Use transaction ID as memo
+      );
 
-      // Step 7: Format data for offramp processing
-      const currency = bankDetails.bankCode.startsWith("0") ? "NGN" : "KES";
-
-      // Step 8: Return properly formatted transaction
+      // Step 10: Return properly formatted transaction
       return {
         id: transaction.transactionId,
         senderAddress: transaction.businessAddress,
@@ -206,19 +264,21 @@ export class PrepareTransactionService {
         institution: bankDetails.bankCode,
         tokenAddress,
         token: transaction.token,
-        tokenDecimals: tokenDecimals, // Use actual token decimals, never use fallback
+        tokenDecimals: tokenDecimals,
         tokenSymbol: transaction.token,
         amount: transaction.tokenAmount,
+        amountInTokenUnits: amountInTokenUnits,
         currency,
-        rate: Math.round(rate * 100), // Convert rate to basis points (multiply by 100)
+        rate: Math.round(rate * 100),
         refundAddress: transaction.businessAddress,
         status: TransactionStatus.PENDING,
         network,
         chain: transaction.chain,
-        walletId: transaction.walletId,
-        addressId: transaction.addressId,
-        rpcUrl: rpcUrl, // Include RPC URL
-        chainId: chainId, // Include Chain ID
+        walletId: walletId,
+        addressId: addressId,
+        rpcUrl: rpcUrl,
+        chainId: chainId,
+        encryptedRecipient: encryptedRecipient,
         memo: `Offramp for transaction ${transaction.transactionId}`,
       };
     } catch (error) {

@@ -248,6 +248,8 @@ export class OrderService {
     walletConfig: { walletId: string; apiKey: string; walletName: string; },
     addressId: string
   ): Promise<{ currentBalance: string; amountInTokenUnits: string; tokenInfo: any }> {
+    console.log(`[DEBUG] Getting balance for token=${tokenAddress}, owner=${ownerAddress}`);
+    
     const balanceResponse = await customSmartContractRead({
       walletId: walletConfig.walletId,
       addressId,
@@ -265,11 +267,27 @@ export class OrderService {
       throw new Error(`Token information not found for address ${tokenAddress}`);
     }
     
+    // The amount is already in smallest token units, no need to convert again
+    // Just verify it's a valid number
     try {
-      const amountInTokenUnits = parseUnits(amount, tokenInfo.decimals).toString();
-      return { currentBalance, amountInTokenUnits, tokenInfo };
+      // Validate that the amount is a valid number
+      const amountBigInt = BigInt(amount);
+      
+      // For logging, show human-readable values
+      const tokenDecimals = tokenInfo.decimals;
+      const readableAmount = this.formatTokenAmount(amount, tokenDecimals);
+      const readableBalance = this.formatTokenAmount(currentBalance, tokenDecimals);
+      
+      console.log(`[DEBUG] Token balance: ${readableBalance} ${tokenInfo.symbol} (raw: ${currentBalance})`);
+      console.log(`[DEBUG] Required amount: ${readableAmount} ${tokenInfo.symbol} (raw: ${amount})`);
+      
+      return { 
+        currentBalance, 
+        amountInTokenUnits: amount,  // Just pass the original amount as it's already in token units
+        tokenInfo 
+      };
     } catch (conversionError) {
-      throw new Error(`Failed to convert amount: ${conversionError.message}`);
+      throw new Error(`Invalid amount format: ${conversionError.message}`);
     }
   }
 
@@ -285,8 +303,36 @@ export class OrderService {
     const balanceBigInt = BigInt(currentBalance);
     const requiredAmountBigInt = BigInt(amountInTokenUnits);
     
+    // Format values for human-readable error messages
+    const tokenDecimals = tokenInfo.decimals;
+    const formattedBalance = this.formatTokenAmount(currentBalance, tokenDecimals);
+    const formattedAmount = this.formatTokenAmount(amountInTokenUnits, tokenDecimals);
+    
     if (balanceBigInt < requiredAmountBigInt) {
-      throw new Error(`Insufficient token balance. Required: ${amount} ${tokenInfo.symbol}, Available: ${currentBalance}`);
+      throw new Error(`Insufficient token balance. Required: ${formattedAmount} ${tokenInfo.symbol}, Available: ${formattedBalance} ${tokenInfo.symbol}`);
+    }
+  }
+  
+  /**
+   * Helper to format token amounts with proper decimals for human-readable display
+   */
+  private formatTokenAmount(rawAmount: string, decimals: number): string {
+    try {
+      const amountBigInt = BigInt(rawAmount);
+      const divisor = BigInt(10) ** BigInt(decimals);
+      
+      // Integer part
+      const integerPart = (amountBigInt / divisor).toString();
+      
+      // Fractional part with proper padding
+      let fractionalPart = (amountBigInt % divisor).toString();
+      fractionalPart = fractionalPart.padStart(decimals, '0');
+      
+      // Combine with decimal point, removing trailing zeros
+      const formatted = `${integerPart}.${fractionalPart}`;
+      return parseFloat(formatted).toFixed(6);
+    } catch (error) {
+      return rawAmount; // Fallback to raw value if formatting fails
     }
   }
 

@@ -10,6 +10,7 @@ export interface Transaction {
   tokenDecimals: number;
   tokenSymbol: string;
   amount: number;
+  amountInTokenUnits: string;
   currency: string;
   rate: number;
   refundAddress: string;
@@ -21,6 +22,7 @@ export interface Transaction {
   addressId?: string;
   rpcUrl?: string;
   chainId?: number;
+  encryptedRecipient: string;
 }
 
 export interface Token {
