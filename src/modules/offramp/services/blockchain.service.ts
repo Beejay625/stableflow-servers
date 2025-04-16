@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 import { OfframpTransaction } from '../entities/offramp-transaction.entity';
 import { Transaction as WalletTransaction } from '../../wallet/entities/transaction.entity';
 import { TransactionStatus } from '../../wallet/constants/status.enum';
-import { getGatewayAddressForNetwork, mapNetworkFromConfig } from '../utils';
+import { mapNetworkFromConfig, getTokenInfoByAddress } from '../utils';
 
 /**
  * Service for blockchain-related functionality for the offramp process
@@ -26,131 +26,79 @@ export class BlockchainService {
   ) {}
 
   /**
-   * Extracts the order ID from transaction logs using txHash and rpcUrl.
-   * Orchestrates fetching receipt, finding logs, and updating DB.
+   * Gets the order ID from a transaction hash by parsing logs
    */
-  async getOrderIdFromTransaction(txHash: string, rpcUrl: string, originalTransactionId?: string): Promise<string | null> {
+  async getOrderIdFromTransaction(
+    txHash: string,
+    rpcUrl: string,
+    transactionId?: string // Optional ID for DB updates
+  ): Promise<string | null> {
     try {
-      this.logger.log(`Extracting order ID from transaction ${txHash} using RPC ${rpcUrl}`);
+      this.logger.log(`Getting order ID from transaction ${txHash}`);
       
-      // 1. Get Transaction Receipt
-      const receipt = await this._getTransactionReceipt(txHash, rpcUrl);
-      if (!receipt) return null;
-
-      // 2. Determine Gateway Address
-      const gatewayAddress = this._getGatewayAddress(rpcUrl);
-      if (!gatewayAddress) return null;
-
-      // 3. Find Order ID in Logs
-      const orderId = this._findOrderIdInLogs(receipt, gatewayAddress, txHash);
-      if (!orderId) return null;
-
-      // 4. Update Database (Optional)
-      if (originalTransactionId) {
-        await this._updateOfframpTransactionWithOrderId(originalTransactionId, orderId, gatewayAddress);
-      }
-      
-      return orderId;
-      
-    } catch (error) {
-      this.logger.error(`Error extracting Order ID from transaction ${txHash}: ${error.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Gets a transaction receipt from the specified RPC provider.
-   */
-  private async _getTransactionReceipt(txHash: string, rpcUrl: string): Promise<TransactionReceipt | null> {
-    try {
-      if (!rpcUrl) {
-        this.logger.warn('Missing RPC URL for transaction receipt retrieval');
-        return null;
-      }
-      
+      // Get transaction receipt
       const provider = new ethers.JsonRpcProvider(rpcUrl);
       const receipt = await provider.getTransactionReceipt(txHash);
       
       if (!receipt) {
-        this.logger.warn(`Transaction receipt not found for hash ${txHash}`);
-        return null;
+        throw new Error(`No receipt found for transaction ${txHash}`);
       }
-      
-      return receipt;
-    } catch (error) {
-      this.logger.error(`Error getting transaction receipt: ${error.message}`);
-      return null;
-    }
-  }
 
-  /**
-   * Determines the gateway address based on configuration.
-   * Uses the RPC URL to determine the correct network
-   */
-  private _getGatewayAddress(rpcUrl: string): string | null {
-    try {
-      // Determine network based on RPC URL
-      let networkName: string;
-      
-      if (rpcUrl.includes('sepolia')) {
-        // This is Base Sepolia
-        networkName = 'Base Sepolia';
-      } else if (rpcUrl.includes('base.org')) {
-        // This is Base Mainnet
-        networkName = 'Base';
-      } else if (rpcUrl.includes('binance') && rpcUrl.includes('seed-prebsc')) {
-        // This is BNB Smart Chain Testnet
-        networkName = 'BNB Smart Chain Testnet';
-      } else if (rpcUrl.includes('binance') || rpcUrl.includes('bsc')) {
-        // This is BNB Smart Chain Mainnet
-        networkName = 'BNB Smart Chain';
-      } else {
-        // Fall back to config mapping as a last resort
-        const configNetwork = this.configService.get<string>('blockradar.network');
-        networkName = mapNetworkFromConfig(configNetwork);
+      // Get transaction data to find token address
+      const tx = await provider.getTransaction(txHash);
+      if (!tx || !tx.to) {
+        throw new Error(`No transaction data found for ${txHash}`);
+      }
+
+      // Get token info to get gateway address
+      const tokenInfo = getTokenInfoByAddress(tx.to);
+      if (!tokenInfo) {
+        throw new Error(`Token information not found for address ${tx.to}`);
       }
       
-      this.logger.log(`Determined network name: ${networkName} from RPC URL: ${rpcUrl}`);
-      
-      const gatewayAddress = getGatewayAddressForNetwork(networkName);
+      const gatewayAddress = tokenInfo.gatewayAddress;
       if (!gatewayAddress) {
-        throw new Error(`Could not determine gateway address for network: ${networkName}`);
+        throw new Error(`Gateway address not found for token ${tx.to}`);
       }
-      
-      this.logger.log(`Using gateway address ${gatewayAddress} for network ${networkName}`);
-      return gatewayAddress;
-    } catch (error) {
-      this.logger.error(`Failed to get gateway address: ${error.message}`);
-      return null;
-    }
-  }
 
-  /**
-   * Finds the OrderCreated log from the gateway contract and extracts the orderId.
-   */
-  private _findOrderIdInLogs(receipt: TransactionReceipt, gatewayAddress: string, txHash: string): string | null {
-    for (const log of receipt.logs) {
-      if (log.address && log.address.toLowerCase() === gatewayAddress.toLowerCase()) {
-        if (log.topics.length >= 4) {
-          const potentialOrderId = BigInt(log.topics[3]).toString();
-          if (potentialOrderId && potentialOrderId !== "0") {
-            this.logger.log(`Found Order ID ${potentialOrderId} in logs for transaction ${txHash}`);
-            return potentialOrderId;
+      // Create contract interface
+      const iface = new ethers.Interface(gatewayAbi);
+      
+      // Look for OrderCreated event in logs
+      for (const log of receipt.logs) {
+        if (log.address.toLowerCase() === gatewayAddress.toLowerCase()) {
+          try {
+            const parsedLog = iface.parseLog(log);
+            if (parsedLog && parsedLog.name === 'OrderCreated') {
+              const orderId = parsedLog.args.orderId;
+              
+              // Update DB if we have a transaction ID
+              if (transactionId) {
+                await this._updateTransactionWithOrderId(transactionId, orderId);
+              }
+              
+              return orderId;
+            }
+          } catch (parseError) {
+            // Skip logs that can't be parsed
+            continue;
           }
         }
       }
+      
+      return null;
+    } catch (error) {
+      this.logger.error(`Error getting order ID: ${error.message}`);
+      return null;
     }
-    this.logger.warn(`Order ID not found in logs for transaction ${txHash}`);
-    return null;
   }
 
   /**
    * Updates the OfframpTransaction record with the extracted order ID.
    * @param transactionId The business identifier of the transaction (originalTransactionId)
    * @param orderId The extracted blockchain order ID
-   * @param gatewayAddress The address of the gateway contract
    */
-  private async _updateOfframpTransactionWithOrderId(transactionId: string, orderId: string, gatewayAddress: string): Promise<void> {
+  private async _updateTransactionWithOrderId(transactionId: string, orderId: string): Promise<void> {
     try {
       // First find the main transaction by its business ID
       const mainTransaction = await this.transactionRepository.findOne({
@@ -172,10 +120,6 @@ export class BlockchainService {
           { id: offrampTransaction.id },
           {
             offrampId: orderId,
-            logs: { // Cast to any to satisfy TypeORM update typing for jsonb
-              orderId: orderId,
-              fromContract: gatewayAddress
-            } as any,
             status: TransactionStatus.PROCESSING // Mark as processing now that we have the ID
           }
         );

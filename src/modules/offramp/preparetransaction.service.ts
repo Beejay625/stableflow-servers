@@ -99,13 +99,10 @@ export class PrepareTransactionService {
         `);
       }
 
-      // Step 3: Map network based on config and transaction chain
-      const network = mapNetworkFromConfig(
-        this.configNetwork,
-        transaction.chain,
-      );
+      // Step 3: Use chain directly from transaction - no mapping needed
+      const network = transaction.chain;
       this.logger.log(
-        `Mapped network ${network} for chain ${transaction.chain} with config ${this.configNetwork}`,
+        `Using network ${network} from transaction chain`,
       );
       
       // Enhanced logging
@@ -121,7 +118,7 @@ export class PrepareTransactionService {
         );
       }
 
-      // Step 5: Get token information to retrieve correct decimals
+      // Step 5: Get token information to retrieve correct decimals and gateway
       const tokenInfo = getTokenInfoByAddress(tokenAddress);
       if (!tokenInfo) {
         throw new Error(
@@ -132,16 +129,30 @@ export class PrepareTransactionService {
       const tokenDecimals = tokenInfo.decimals;
       const rpcUrl = tokenInfo.rpcUrl;
       const chainId = tokenInfo.chainId;
+      const gatewayAddress = tokenInfo.gatewayAddress;
+      
+      // Strict validation
+      if (!rpcUrl) {
+        throw new Error(
+          `Token ${transaction.token} (${tokenAddress}) must have an RPC URL configured for network ${network}. This is required for blockchain interactions.`
+        );
+      }
+
+      if (!gatewayAddress) {
+        throw new Error(
+          `Token ${transaction.token} (${tokenAddress}) must have a gateway address configured for network ${network}.`
+        );
+      }
+      
       this.logger.log(
-        `Using token decimals: ${tokenDecimals} for ${transaction.token}, rpcUrl: ${rpcUrl}, chainId: ${chainId}`,
+        `Using token-specific RPC URL: ${rpcUrl} and gateway: ${gatewayAddress} for token ${transaction.token} on network ${network}`,
       );
 
       // Step 6: Get wallet configuration based on chain and token
       // This is crucial for processing the transaction with the correct wallet
-      const walletConfig = this.walletConfigService.getWalletConfigForTransaction({
-        blockchainName: transaction.chain,
-        tokenSymbol: transaction.token
-        // Don't pass transaction walletId as we want to use only the config walletId
+      const walletConfig = this.walletConfigService.getWalletConfig({
+        blockchainName: network,
+        tokenSymbol: tokenInfo.symbol
       });
       
       this.logger.log(
@@ -255,7 +266,7 @@ export class PrepareTransactionService {
         `Offramp for transaction ${transaction.transactionId}` // Use transaction ID as memo
       );
 
-      // Step 10: Return properly formatted transaction
+      // Step 10: Return properly formatted transaction with gateway address
       return {
         id: transaction.transactionId,
         senderAddress: transaction.businessAddress,
@@ -278,8 +289,10 @@ export class PrepareTransactionService {
         addressId: addressId,
         rpcUrl: rpcUrl,
         chainId: chainId,
+        gatewayAddress: gatewayAddress,
         encryptedRecipient: encryptedRecipient,
         memo: `Offramp for transaction ${transaction.transactionId}`,
+        walletConfig
       };
     } catch (error) {
       this.logger.error(
@@ -287,6 +300,85 @@ export class PrepareTransactionService {
         error.stack,
       );
       throw error;
+    }
+  }
+
+  /**
+   * Formats token amount with proper decimals for human-readable display
+   * Moved from OrderService to centralize token amount formatting
+   */
+  formatTokenAmount(rawAmount: string, decimals: number): string {
+    try {
+      const amountBigInt = BigInt(rawAmount);
+      const divisor = BigInt(10) ** BigInt(decimals);
+      
+      // Integer part
+      const integerPart = (amountBigInt / divisor).toString();
+      
+      // Fractional part with proper padding
+      let fractionalPart = (amountBigInt % divisor).toString();
+      fractionalPart = fractionalPart.padStart(decimals, '0');
+      
+      // Combine with decimal point, removing trailing zeros
+      const formatted = `${integerPart}.${fractionalPart}`;
+      return parseFloat(formatted).toFixed(6);
+    } catch (error) {
+      return rawAmount; // Fallback to raw value if formatting fails
+    }
+  }
+
+  /**
+   * Validates token configuration and returns token info with RPC URL
+   * Centralized method to avoid duplicate validation across services
+   */
+  async validateTokenConfiguration(
+    tokenAddress: string,
+    network: string,
+  ): Promise<{
+    tokenInfo: any;
+    rpcUrl: string;
+    chainId: number;
+  }> {
+    const tokenInfo = getTokenInfoByAddress(tokenAddress);
+    if (!tokenInfo) {
+      throw new Error(
+        `Token information not found for ${tokenAddress} on network ${network}`,
+      );
+    }
+
+    if (!tokenInfo.rpcUrl) {
+      throw new Error(
+        `Token ${tokenAddress} must have an RPC URL configured for network ${network}. This is required for blockchain interactions.`
+      );
+    }
+
+    return {
+      tokenInfo,
+      rpcUrl: tokenInfo.rpcUrl,
+      chainId: tokenInfo.chainId,
+    };
+  }
+
+  /**
+   * Validates if balance is sufficient for transaction
+   * Centralized method moved from OrderService
+   */
+  validateSufficientBalance(
+    currentBalance: string,
+    requiredAmount: string,
+    tokenInfo: any,
+  ): void {
+    const balanceBigInt = BigInt(currentBalance);
+    const requiredAmountBigInt = BigInt(requiredAmount);
+    
+    // Format values for human-readable error messages
+    const formattedBalance = this.formatTokenAmount(currentBalance, tokenInfo.decimals);
+    const formattedAmount = this.formatTokenAmount(requiredAmount, tokenInfo.decimals);
+    
+    if (balanceBigInt < requiredAmountBigInt) {
+      throw new Error(
+        `Insufficient token balance. Required: ${formattedAmount} ${tokenInfo.symbol}, Available: ${formattedBalance} ${tokenInfo.symbol}`
+      );
     }
   }
 }

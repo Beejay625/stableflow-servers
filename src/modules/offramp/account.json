@@ -1,0 +1,141 @@
+{
+    "event": "deposit.success",
+    "data": {
+        "id": "450fc0c3-fa09-4528-bae9-199e24362350",
+        "reference": "6zQ7kaJKLx",
+        "senderAddress": "0x74f23834E16Dbd1b911F355B6849edd82d907056",
+        "recipientAddress": "0x52c9ccF6FF27d8d63B96eFa405c06C2bA29acdA4",
+        "tokenAddress": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "amount": "0.01",
+        "amountPaid": "0.01",
+        "fee": null,
+        "currency": "USD",
+        "blockNumber": 24472997,
+        "blockHash": "0xd21ce02ed42d8821bf165ae9d30070272d2fe180ad9e532d66272cc6de3cb49d",
+        "hash": "0x6fe95dae50257fe26fce30fa10b4b3d58aa79fc7668c2f3e92b2674d709877ac",
+        "confirmations": 7,
+        "confirmed": true,
+        "gasPrice": "1000648",
+        "gasUsed": "45047",
+        "gasFee": "0.000000045076190456",
+        "status": "SUCCESS",
+        "type": "DEPOSIT",
+        "note": null,
+        "amlScreening": {
+            "provider": "ofac, fbi, tether, circle",
+            "status": "success",
+            "message": "Address is not sanctioned"
+        },
+        "assetSwept": null,
+        "assetSweptAt": null,
+        "assetSweptGasFee": null,
+        "assetSweptHash": null,
+        "assetSweptSenderAddress": null,
+        "assetSweptRecipientAddress": null,
+        "assetSweptAmount": null,
+        "reason": "Deposit to child wallet",
+        "network": "testnet",
+        "chainId": 84532,
+        "metadata": {
+            "user_id": "31d20329-aded-49b7-9e49-2e92988d505d",
+            "business_id": "628fa13f-454c-44d5-b447-58c7d077cc52",
+            "wallet_type": "bep20usdt"
+        },
+        "toAmount": null,
+        "rate": null,
+        "createdAt": "2025-04-15T10:51:35.860Z",
+        "updatedAt": "2025-04-15T10:51:35.860Z",
+        "asset": {
+            "id": "be793fad-bc65-4866-8937-41d2605114a6",
+            "name": "USD Coin",
+            "symbol": "USDC",
+            "decimals": 6,
+            "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "standard": null,
+            "isActive": true,
+            "logoUrl": "https://res.cloudinary.com/blockradar/image/upload/v1716800083/crypto-assets/usd-coin-usdc-logo_fs9mhv.png",
+            "network": "testnet",
+            "isNative": false,
+            "createdAt": "2024-06-08T12:59:13.061Z",
+            "updatedAt": "2024-06-09T10:39:25.703Z"
+        },
+        "address": {
+            "id": "47d40f10-a71e-45ee-badb-f4650757ec3e",
+            "address": "0x52c9ccF6FF27d8d63B96eFa405c06C2bA29acdA4",
+            "name": "My_Awesome_Business_628fa13f-454c-44d5-b447-58c7d077cc52",
+            "isActive": true,
+            "type": "INTERNAL",
+            "derivationPath": "m/44'/60'/0'/0/24",
+            "metadata": {
+                "user_id": "31d20329-aded-49b7-9e49-2e92988d505d",
+                "business_id": "628fa13f-454c-44d5-b447-58c7d077cc52",
+                "wallet_type": "bep20usdt"
+            },
+            "configurations": {
+                "aml": {
+                    "status": "success",
+                    "message": "Address is not sanctioned",
+                    "provider": "ofac, fbi, tether, circle"
+                },
+                "showPrivateKey": false,
+                "disableAutoSweep": false,
+                "enableGaslessWithdraw": false
+            },
+            "network": "testnet",
+            "createdAt": "2025-04-06T22:52:23.157Z",
+            "updatedAt": "2025-04-06T22:52:23.157Z"
+        },
+        "blockchain": {
+            "id": "28a730d3-211b-40f7-bb8f-dd589dcc738e",
+            "name": "base",
+            "symbol": "eth",
+            "slug": "base",
+            "derivationPath": "m/44'/60'/0'/0",
+            "isEvmCompatible": true,
+            "isL2": true,
+            "logoUrl": "https://res.cloudinary.com/blockradar/image/upload/v1716800080/crypto-assets/Base_Network_Logo_vqyh7r.png",
+            "isActive": true,
+            "tokenStandard": null,
+            "createdAt": "2024-06-07T11:09:56.586Z",
+            "updatedAt": "2024-11-26T15:26:21.825Z"
+        },
+        "wallet": {
+            "id": "d8b11eb0-fe88-4e56-a007-ffe43d41b3c3",
+            "name": "usdcbase",
+            "description": "usdcbase",
+            "address": "0x74f23834E16Dbd1b911F355B6849edd82d907056",
+            "derivationPath": "m/44'/60'/0'/0/0",
+            "isActive": true,
+            "status": "ACTIVE",
+            "network": "testnet",
+            "configurations": {
+                "withdrawal": {
+                    "gasless": {
+                        "isActive": true,
+                        "operator": "gt",
+                        "threshold": 0
+                    }
+                },
+                "autoSweeping": {
+                    "isActive": false,
+                    "threshold": 0
+                }
+            },
+            "createdAt": "2025-03-12T19:11:59.773Z",
+            "updatedAt": "2025-03-27T23:09:42.743Z",
+            "business": {
+                "id": "67af174a-a211-4f66-9030-cc4d817160c7",
+                "name": "Stableflow",
+                "sector": "on/off ramp provider",
+                "status": "ACTIVE",
+                "createdAt": "2025-03-12T15:48:41.385Z",
+                "updatedAt": "2025-03-12T15:48:41.385Z"
+            }
+        },
+        "beneficiary": null,
+        "paymentLink": null,
+        "toAsset": null,
+        "toBlockchain": null,
+        "toWallet": null
+    }
+}

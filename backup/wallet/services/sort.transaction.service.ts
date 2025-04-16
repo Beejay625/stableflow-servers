@@ -8,7 +8,7 @@ import { TransactionStatus } from "../constants/status.enum";
 import { ConfigService } from "@nestjs/config";
 import { RedisService } from "../../redis/redis.service";
 import { QueueService } from "../../queue/queue.service";
-import { WalletConfigService } from "../../../common/utils/wallet-config";
+import { WalletConfigService } from "../../common/utils/wallet-config";
 
 // Import the OfframpService
 import { OfframpService } from "../../offramp/offramp.service";

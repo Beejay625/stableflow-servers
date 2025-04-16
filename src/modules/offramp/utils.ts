@@ -6,53 +6,18 @@ import * as crypto from 'crypto';
 import { PublicKeyResponse } from './interfaces/response.interface';
 
 /**
- * Maps environment network configuration and chain to actual network names
- * @param configNetwork - The network value from environment config
- * @param chain - The blockchain network from the transaction
- * @returns The actual network name used in the system
+ * Maps network configuration to determine if we're in testnet or mainnet mode
+ * Only used for gateway determination
  */
-function mapNetworkFromConfig(configNetwork: string, chain?: string): string {
-  console.log(`[DEBUG] mapNetworkFromConfig called with configNetwork=${configNetwork}, chain=${chain || 'not provided'}`);
+function mapNetworkFromConfig(configNetwork: string): 'mainnet' | 'testnet' {
+  console.log(`[DEBUG] Determining network type from config: ${configNetwork}`);
   
-  // First check if chain is specified
-  if (chain) {
-    // Handle Base chain explicitly
-    if (chain.toLowerCase() === 'base') {
-      const result = configNetwork === 'mainnet' ? 'Base' : 'Base Sepolia';
-      console.log(`[DEBUG] Chain is 'base', returning ${result} based on configNetwork=${configNetwork}`);
-      return result;
-    }
-    
-    // Handle BNB Smart Chain explicitly
-    if (chain.toLowerCase().includes('bnb') || chain.toLowerCase().includes('binance')) {
-      const result = configNetwork === 'mainnet' ? 'BNB Smart Chain' : 'BNB Smart Chain Testnet';
-      console.log(`[DEBUG] Chain contains 'bnb' or 'binance', returning ${result} based on configNetwork=${configNetwork}`);
-      return result;
-    }
-  }
-
-  // Default mapping based on config only (when chain is not provided)
-  let result;
-  switch (configNetwork) {
-    case 'mainnet':
-      result = 'BNB Smart Chain'; // Default to BNB Smart Chain if no chain specified
-      break;
-    case 'testnet':
-      result = 'BNB Smart Chain Testnet';
-      break;
-    case 'base':
-      result = 'Base';
-      break;
-    case 'base-testnet':
-      result = 'Base Sepolia';
-      break;
-    default:
-      console.log(`[DEBUG] Unsupported network configuration: ${configNetwork}`);
-      throw new Error(`Unsupported network configuration: ${configNetwork}`);
-  }
+  // Simple mapping - anything with 'test' is considered testnet
+  const isTestnet = configNetwork.toLowerCase().includes('test');
+  const networkType = isTestnet ? 'testnet' : 'mainnet';
   
-  console.log(`[DEBUG] No specific chain match, falling back to config mapping: ${configNetwork} -> ${result}`);
-  return result;
+  console.log(`[DEBUG] Determined network type: ${networkType}`);
+  return networkType;
 }
 
 /**
@@ -61,6 +26,8 @@ function mapNetworkFromConfig(configNetwork: string, chain?: string): string {
  * @returns Array of supported tokens for the network or undefined if network not supported
  */
 function fetchSupportedTokens(network: string): Token[] | undefined {
+  console.log(`[DEBUG] Fetching supported tokens for network: ${network}`);
+  
   const tokens: { [key: string]: Token[] } = {
     Base: [
       {
@@ -69,7 +36,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         decimals: 6,
         address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
         rpcUrl: "https://mainnet.base.org",
-        chainId: 8453
+        chainId: 8453,
+        gatewayAddress: "0x30f6a8457f8e42371e204a9c103f2bd42341dd0f"
       },
     ],
     "Base Sepolia": [
@@ -79,7 +47,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         decimals: 6,
         address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         rpcUrl: "https://sepolia.base.org",
-        chainId: 84532
+        chainId: 84532,
+        gatewayAddress: "0x847dfdaa218f9137229cf8424378871a1da8f625"
       },
       {
         name: "Dai",
@@ -87,7 +56,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         decimals: 18,
         address: "0x7683022d84f726a96c4a6611cd31dbf5409c0ac9",
         rpcUrl: "https://sepolia.base.org",
-        chainId: 84532
+        chainId: 84532,
+        gatewayAddress: "0x847dfdaa218f9137229cf8424378871a1da8f625"
       },
     ],
     "BNB Smart Chain": [
@@ -97,7 +67,8 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         decimals: 18,
         address: "0x55d398326f99059fF775485246999027B3197955",
         rpcUrl: "https://bsc-dataseed.binance.org",
-        chainId: 56
+        chainId: 56,
+        gatewayAddress: "0x1FA0EE7F9410F6fa49B7AD5Da72Cf01647090028"
       },
     ],
     "BNB Smart Chain Testnet": [
@@ -107,33 +78,23 @@ function fetchSupportedTokens(network: string): Token[] | undefined {
         decimals: 18,
         address: "0x337610d27c682E347C9cD60BD4b3b107C9d34dDd",
         rpcUrl: "https://data-seed-prebsc-1-s1.binance.org:8545",
-        chainId: 97
+        chainId: 97,
+        gatewayAddress: "0x0000000000000000000000000000000000000000"
       },
     ],
   };
-  return tokens[network];
-}
-
-/**
- * Gets the appropriate gateway contract address based on network
- * @param network - The network name (e.g., 'Base', 'BNB Smart Chain', 'Base Sepolia', 'BNB Smart Chain Testnet')
- * @returns The gateway contract address for the specified network
- * @throws Error if network is not supported
- */
-function getGatewayAddressForNetwork(network: string): string {
-  const addresses: { [key: string]: string } = {
-    'Base': "0x30f6a8457f8e42371e204a9c103f2bd42341dd0f", // Base Mainnet
-    'BNB Smart Chain': "0x1FA0EE7F9410F6fa49B7AD5Da72Cf01647090028", // BNB Smart Chain Mainnet
-    'Base Sepolia': "0x847dfdaa218f9137229cf8424378871a1da8f625", // Base Testnet
-    'BNB Smart Chain Testnet': "0x0000000000000000000000000000000000000000" // BNB Smart Chain Testnet
-  };
-
-  const address = addresses[network];
-  if (!address) {
-    throw new Error(`Unsupported network: ${network}`);
+  
+  const networkTokens = tokens[network];
+  if (networkTokens) {
+    console.log(`[DEBUG] Found ${networkTokens.length} tokens for network ${network}:`);
+    networkTokens.forEach(token => {
+      console.log(`[DEBUG] - ${token.symbol}: RPC URL = ${token.rpcUrl}, Gateway = ${token.gatewayAddress}`);
+    });
+  } else {
+    console.log(`[DEBUG] No tokens found for network ${network}`);
   }
-
-  return address;
+  
+  return networkTokens;
 }
 
 /**
@@ -429,7 +390,6 @@ function publicKeyEncrypt(data: unknown, publicKeyPEM: string): string {
 
 export { 
   fetchSupportedTokens,
-  getGatewayAddressForNetwork,
   customSmartContractWrite,
   customSmartContractRead,
   mapNetworkFromConfig,

@@ -23,6 +23,13 @@ export interface Transaction {
   rpcUrl?: string;
   chainId?: number;
   encryptedRecipient: string;
+  gatewayAddress?: string;
+  apiKey?: string;
+  walletConfig?: {
+    walletId: string;
+    apiKey: string;
+    walletName: string;
+  };
 }
 
 export interface Token {
@@ -30,8 +37,9 @@ export interface Token {
   symbol: string;
   decimals: number;
   address: string;
-  rpcUrl?: string;
-  chainId?: number;
+  rpcUrl: string;
+  chainId: number;
+  gatewayAddress: string;
 }
 
 interface TransactionPreviewProps {

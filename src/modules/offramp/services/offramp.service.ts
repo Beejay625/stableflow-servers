@@ -13,7 +13,6 @@ import { Transaction } from '../interfaces/transaction.interface';
 import { TransactionStatus } from '../../wallet/constants/status.enum';
 import { 
   fetchSupportedTokens, 
-  getGatewayAddressForNetwork,
   customSmartContractWrite,
   customSmartContractRead,
   mapNetworkFromConfig,
@@ -36,9 +35,6 @@ export class OfframpService {
   private readonly aggregatorUrl: string;
   private readonly ngnProviderId: string;
   private readonly kesProviderId: string;
-  private readonly walletId: string;
-  private readonly apiKey: string;
-  private readonly network: string;
   private readonly senderFeeRecipient: string;
   private readonly senderFeeAmount: string;
 
@@ -66,16 +62,9 @@ export class OfframpService {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.ngnProviderId = this.configService.get<string>('NGN_PROVIDER_ID');
     this.kesProviderId = this.configService.get<string>('KES_PROVIDER_ID');
-    this.walletId = this.configService.get<string>('blockradar.walletId');
-    this.apiKey = this.configService.get<string>('paycrest.apiKey');
     this.senderFeeRecipient = this.configService.get<string>(SENDER_FEE_RECIPIENT);
     this.senderFeeAmount = this.configService.get<string>(SENDER_FEE_AMOUNT);
-    
-    // Get the network configuration and map it to the appropriate network name
-    const configNetwork = this.configService.get<string>('blockradar.network');
-    this.network = mapNetworkFromConfig(configNetwork);
-    
-    this.logger.log(`Initialized OfframpService with network: ${this.network}`);
+    this.logger.log(`Initialized OfframpService`);
   }
 
   /**
@@ -135,13 +124,12 @@ export class OfframpService {
     hash: string;
     offrampId?: string;
   }> {
-    const transactionId = transaction.id; // Get original ID for context
+    const transactionId = transaction.id;
     try {
       this.logger.log(`Creating offramp order for prepared transaction: ${transactionId}`);
 
       // Step 1: Basic validations on prepared data
       const transactionNetwork = transaction.network;
-      const gatewayAddress = getGatewayAddressForNetwork(transactionNetwork);
       if (!transaction.addressId || !transaction.walletId) {
         throw new Error(`Missing critical wallet info (addressId/walletId) for transaction ${transactionId}`);
       }
@@ -151,27 +139,25 @@ export class OfframpService {
       if (!transaction.rate || transaction.rate <= 0) {
         throw new Error(`Invalid rate in prepared transaction: ${transaction.rate}`);
       }
-
-      // Step 2: Get wallet config
-      const walletConfig = this.walletConfigService.getWalletConfigForTransaction({
-        blockchainName: transaction.chain,
-        tokenSymbol: transaction.tokenSymbol,
-        walletId: transaction.walletId
-      });
+      if (!transaction.gatewayAddress) {
+        throw new Error(`Missing gateway address for transaction ${transactionId}`);
+      }
 
       // Step 3: Approve token spending
       this.logger.log(`Step 3: Approving token spending for transaction: ${transactionId}`);
       const approvalTx = await this.orderService.approveTokenSpending(
         transaction.tokenAddress,
-        gatewayAddress,
-        transaction.amountInTokenUnits, // Use pre-calculated amount
+        transaction.gatewayAddress,
+        transaction.amountInTokenUnits,
         transaction.senderAddress,
-        walletConfig,
-        transaction.addressId
+        transaction.addressId,
+        transaction.rpcUrl,
+        transaction.walletConfig,
+        transaction.network
       );
       this.logger.log(`Token approval response: ${approvalTx.txId || 'existing-allowance'}`);
 
-       // Check if the approval call itself returned an error
+      // Check if the approval call itself returned an error
       if (approvalTx.error) {
         throw new Error(`Token approval failed: ${approvalTx.error}`);
       }
@@ -180,9 +166,9 @@ export class OfframpService {
       if (approvalTx.txId) {
         this.logger.log(`Waiting for approval transaction ${approvalTx.txId} to be confirmed...`);
         const approvalHash = await this.waitForTransactionConfirmation(
-          walletConfig.walletId, 
-          approvalTx.txId, 
-          walletConfig.apiKey
+          transaction.walletConfig.walletId,
+          approvalTx.txId,
+          transaction.walletConfig.apiKey
         );
         if (approvalHash === 'pending-hash') {
           throw new Error(`Approval transaction ${approvalTx.txId} confirmation timed out`);
@@ -203,11 +189,11 @@ export class OfframpService {
       try {
         // Execute the order creation transaction
         const txResponse = await customSmartContractWrite({
-          walletId: walletConfig.walletId,
+          walletId: transaction.walletConfig.walletId,
           addressId: transaction.addressId,
-          apiKey: walletConfig.apiKey,
+          apiKey: transaction.walletConfig.apiKey,
           abi: (await import('../abis/abi')).gatewayAbi as unknown as object[],
-          address: gatewayAddress,
+          address: transaction.gatewayAddress,
           method: "createOrder",
           parameters: [
             transaction.tokenAddress,
@@ -228,9 +214,9 @@ export class OfframpService {
         
         // Step 6: Wait for order creation confirmation
         orderTxHash = await this.waitForTransactionConfirmation(
-          walletConfig.walletId, 
-          offrampApiTxId, 
-          walletConfig.apiKey
+          transaction.walletConfig.walletId,
+          offrampApiTxId,
+          transaction.walletConfig.apiKey
         );
         
         if (orderTxHash === 'pending-hash') {

@@ -1,10 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import axios from 'axios';
 import { ethers } from 'ethers';
 import { parseUnits } from 'viem';
+import { PrepareTransactionService } from '../preparetransaction.service';
+import { WalletConfigService } from '../../../common/utils/wallet-config';
 
 import { Transaction as WalletTransaction } from '../../wallet/entities/transaction.entity';
 import { OrderStatusResponse } from '../interfaces/response.interface';
@@ -12,7 +14,6 @@ import { erc20Abi, gatewayAbi } from '../abis/abi';
 import { 
   customSmartContractRead,
   customSmartContractWrite,
-  getGatewayAddressForNetwork,
   getTokenInfoByAddress,
 } from '../utils';
 
@@ -24,11 +25,14 @@ import {
 export class OrderService {
   private readonly aggregatorUrl: string;
   private readonly network: string;
+  private readonly logger = new Logger(OrderService.name);
 
   constructor(
     private readonly configService: ConfigService,
     @InjectRepository(WalletTransaction)
     private readonly transactionRepository: Repository<WalletTransaction>,
+    private readonly prepareTransactionService: PrepareTransactionService,
+    private readonly walletConfigService: WalletConfigService,
   ) {
     this.aggregatorUrl = this.configService.get<string>('paycrest.baseUrl');
     this.network = this.configService.get<string>('blockradar.network');
@@ -87,43 +91,28 @@ export class OrderService {
     txHash: string, 
     senderAddress: string, 
     tokenAddress: string,
-    network?: string
+    network?: string,
+    rpcUrl?: string
   ): Promise<string> {
     try {
-      const useNetwork = network || this.network;
-      const gatewayAddress = getGatewayAddressForNetwork(useNetwork);
-      
-      if (!gatewayAddress) {
-        throw new Error(`Gateway address not found for network ${useNetwork}`);
+      if (!rpcUrl) {
+        throw new Error('RPC URL is required for blockchain interaction');
       }
-      
-      // Try API method first
-      const apiOrderId = await this.getOrderIdFromApi(txHash, senderAddress, tokenAddress);
-      if (apiOrderId) return apiOrderId;
-      
-      // Fall back to blockchain method
-      return await this.getOrderIdFromBlockchain(txHash, senderAddress, tokenAddress, gatewayAddress);
-    } catch (error) {
-      throw new Error(`Failed to get order ID: ${error.message}`);
-    }
-  }
 
-  /**
-   * Attempts to retrieve the order ID using the API
-   */
-  private async getOrderIdFromApi(txHash: string, senderAddress: string, tokenAddress: string): Promise<string | null> {
-    try {
-      const response = await axios.get(
-        `${this.aggregatorUrl}/transactions/${txHash}/order`,
-        { params: { sender: senderAddress, token: tokenAddress } }
+      // Get token configuration from PrepareTransactionService
+      const { tokenInfo } = await this.prepareTransactionService.validateTokenConfiguration(
+        tokenAddress,
+        network || this.network
       );
       
-      if (response.data.status === 'success' && response.data.data.orderId) {
-        return response.data.data.orderId;
+      if (!tokenInfo.gatewayAddress) {
+        throw new Error(`Gateway address not found for token ${tokenAddress}`);
       }
-      return null;
-    } catch {
-      return null;
+      
+      // Get order ID from blockchain logs
+      return await this.getOrderIdFromBlockchain(txHash, senderAddress, tokenAddress, tokenInfo.gatewayAddress, rpcUrl);
+    } catch (error) {
+      throw new Error(`Failed to get order ID: ${error.message}`);
     }
   }
 
@@ -134,13 +123,16 @@ export class OrderService {
     txHash: string, 
     senderAddress: string, 
     tokenAddress: string, 
-    gatewayAddress: string
+    gatewayAddress: string,
+    rpcUrl: string
   ): Promise<string> {
-    const rpcUrl = this.configService.get<string>('BASE_RPC_URL');
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    this.logger.log(`Getting order ID from blockchain for tx ${txHash}`);
     
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
     const receipt = await provider.getTransactionReceipt(txHash);
-    if (!receipt) throw new Error('Transaction receipt not found');
+    if (!receipt) {
+      throw new Error('Transaction receipt not found');
+    }
     
     const gatewayInterface = new ethers.Interface(gatewayAbi);
     
@@ -153,17 +145,13 @@ export class OrderService {
           });
           
           if (parsedLog && parsedLog.name === 'OrderCreated') {
-            const { sender, token, orderId } = parsedLog.args;
-            
-            if (
-              sender.toLowerCase() === senderAddress.toLowerCase() &&
-              token.toLowerCase() === tokenAddress.toLowerCase()
-            ) {
-              return orderId;
-            }
+            const { orderId } = parsedLog.args;
+            this.logger.log(`Found order ID ${orderId} for transaction ${txHash}`);
+            return orderId;
           }
         }
-      } catch {
+      } catch (parseError) {
+        this.logger.debug(`Failed to parse log: ${parseError.message}`);
         continue;
       }
     }
@@ -202,28 +190,39 @@ export class OrderService {
     spenderAddress: string,
     amount: string,
     ownerAddress: string,
+    addressId: string,
+    rpcUrl: string,
     walletConfig: { walletId: string; apiKey: string; walletName: string; },
-    addressId?: string
+    network: string
   ): Promise<any> {
     if (!addressId) throw new Error('Missing addressId for token approval');
+    if (!rpcUrl) throw new Error('RPC URL is required for token approval');
     
     try {
+      this.logger.log(`Using provided RPC URL for approval: ${rpcUrl}`);
+      
+      // Check existing allowance and get token info using centralized service
+      const { tokenInfo } = await this.prepareTransactionService.validateTokenConfiguration(
+        tokenAddress,
+        network
+      );
+
+      // Use walletConfig passed as parameter
       // Check existing allowance
       const currentAllowance = await this.checkAllowance(
         tokenAddress, ownerAddress, spenderAddress, walletConfig, addressId
       );
       
-      // Check balance and convert amount
-      const { currentBalance, amountInTokenUnits, tokenInfo } = await this.getBalanceAndConvertAmount(
-        tokenAddress, ownerAddress, amount, walletConfig, addressId
+      // Validate balance using centralized service
+      await this.prepareTransactionService.validateSufficientBalance(
+        ownerAddress,
+        amount,
+        tokenInfo
       );
-      
-      // Validate sufficient balance
-      this.validateSufficientBalance(currentBalance, amountInTokenUnits, amount, tokenInfo);
       
       // Check if allowance is sufficient
       const currentAllowanceBigInt = BigInt(currentAllowance);
-      const requiredAmountBigInt = BigInt(amountInTokenUnits);
+      const requiredAmountBigInt = BigInt(amount);
       
       if (currentAllowanceBigInt >= requiredAmountBigInt) {
         return { txId: 'existing-allowance' };
@@ -231,114 +230,14 @@ export class OrderService {
       
       // Create approval transaction if needed
       return await this.createApprovalTransaction(
-        tokenAddress, spenderAddress, amountInTokenUnits, walletConfig, addressId
+        tokenAddress, spenderAddress, amount, walletConfig, addressId
       );
     } catch (error) {
+      this.logger.error(`Token approval failed: ${error.message}`);
       throw error;
     }
   }
 
-  /**
-   * Retrieves token balance and converts amount to token units
-   */
-  private async getBalanceAndConvertAmount(
-    tokenAddress: string,
-    ownerAddress: string,
-    amount: string,
-    walletConfig: { walletId: string; apiKey: string; walletName: string; },
-    addressId: string
-  ): Promise<{ currentBalance: string; amountInTokenUnits: string; tokenInfo: any }> {
-    console.log(`[DEBUG] Getting balance for token=${tokenAddress}, owner=${ownerAddress}`);
-    
-    const balanceResponse = await customSmartContractRead({
-      walletId: walletConfig.walletId,
-      addressId,
-      apiKey: walletConfig.apiKey,
-      abi: erc20Abi as unknown as object[],
-      address: tokenAddress,
-      method: 'balanceOf',
-      parameters: [ownerAddress],
-    });
-
-    const currentBalance = balanceResponse?.data || '0';
-    
-    const tokenInfo = getTokenInfoByAddress(tokenAddress);
-    if (!tokenInfo) {
-      throw new Error(`Token information not found for address ${tokenAddress}`);
-    }
-    
-    // The amount is already in smallest token units, no need to convert again
-    // Just verify it's a valid number
-    try {
-      // Validate that the amount is a valid number
-      const amountBigInt = BigInt(amount);
-      
-      // For logging, show human-readable values
-      const tokenDecimals = tokenInfo.decimals;
-      const readableAmount = this.formatTokenAmount(amount, tokenDecimals);
-      const readableBalance = this.formatTokenAmount(currentBalance, tokenDecimals);
-      
-      console.log(`[DEBUG] Token balance: ${readableBalance} ${tokenInfo.symbol} (raw: ${currentBalance})`);
-      console.log(`[DEBUG] Required amount: ${readableAmount} ${tokenInfo.symbol} (raw: ${amount})`);
-      
-      return { 
-        currentBalance, 
-        amountInTokenUnits: amount,  // Just pass the original amount as it's already in token units
-        tokenInfo 
-      };
-    } catch (conversionError) {
-      throw new Error(`Invalid amount format: ${conversionError.message}`);
-    }
-  }
-
-  /**
-   * Validates if the balance is sufficient for the transaction
-   */
-  private validateSufficientBalance(
-    currentBalance: string, 
-    amountInTokenUnits: string, 
-    amount: string, 
-    tokenInfo: any
-  ): void {
-    const balanceBigInt = BigInt(currentBalance);
-    const requiredAmountBigInt = BigInt(amountInTokenUnits);
-    
-    // Format values for human-readable error messages
-    const tokenDecimals = tokenInfo.decimals;
-    const formattedBalance = this.formatTokenAmount(currentBalance, tokenDecimals);
-    const formattedAmount = this.formatTokenAmount(amountInTokenUnits, tokenDecimals);
-    
-    if (balanceBigInt < requiredAmountBigInt) {
-      throw new Error(`Insufficient token balance. Required: ${formattedAmount} ${tokenInfo.symbol}, Available: ${formattedBalance} ${tokenInfo.symbol}`);
-    }
-  }
-  
-  /**
-   * Helper to format token amounts with proper decimals for human-readable display
-   */
-  private formatTokenAmount(rawAmount: string, decimals: number): string {
-    try {
-      const amountBigInt = BigInt(rawAmount);
-      const divisor = BigInt(10) ** BigInt(decimals);
-      
-      // Integer part
-      const integerPart = (amountBigInt / divisor).toString();
-      
-      // Fractional part with proper padding
-      let fractionalPart = (amountBigInt % divisor).toString();
-      fractionalPart = fractionalPart.padStart(decimals, '0');
-      
-      // Combine with decimal point, removing trailing zeros
-      const formatted = `${integerPart}.${fractionalPart}`;
-      return parseFloat(formatted).toFixed(6);
-    } catch (error) {
-      return rawAmount; // Fallback to raw value if formatting fails
-    }
-  }
-
-  /**
-   * Creates a token approval transaction
-   */
   private async createApprovalTransaction(
     tokenAddress: string,
     spenderAddress: string,
@@ -360,9 +259,6 @@ export class OrderService {
     return { txId: txId || 'pending-tx' };
   }
 
-  /**
-   * Checks the current allowance for a token
-   */
   async checkAllowance(
     tokenAddress: string, 
     ownerAddress: string, 
@@ -385,6 +281,31 @@ export class OrderService {
       
       return response?.data || '0';
     } catch (error) {
+      throw error;
+    }
+  }
+
+  async validateTokenBalance(
+    walletAddress: string,
+    tokenAddress: string,
+    amount: string,
+    network: string,
+  ): Promise<void> {
+    try {
+      // Use centralized token validation
+      const { tokenInfo } = await this.prepareTransactionService.validateTokenConfiguration(
+        tokenAddress,
+        network,
+      );
+
+      // Use centralized balance validation
+      await this.prepareTransactionService.validateSufficientBalance(
+        walletAddress,
+        amount,
+        tokenInfo,
+      );
+    } catch (error) {
+      this.logger.error(`Failed to validate token balance: ${error.message}`);
       throw error;
     }
   }
